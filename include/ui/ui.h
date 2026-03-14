@@ -72,8 +72,8 @@ typedef enum ui_panel_type {
 typedef unsigned char ui_node_info;
 
 typedef struct ui_node {
-    ui_node_info info;      // panel type | type
-    ui_transform    affine; // local transform
+    ui_node_info info;   // panel type | type
+    ui_transform affine; // local transform
     
     // type-dependent data
     union {
@@ -271,7 +271,7 @@ static inline ui_transform ui_mul(ui_transform p, ui_transform c) {
   - ((x)*(x)*(x)*(x)*(x)*(x)*(x)*(x)*(x)*(x))/3628800.0)
 
 // compile time tranformation matrix builder
-// order: rotate, scale, translate
+// transformation order: rotate, scale, translate
 #define UI_TRANS(offx, offy, scax, scay, deg_cw) \
     (ui_transform){ \
         .m00 = UI_COS_APPROX(UI_DEG_TO_RAD(deg_cw)) * (scax), \
