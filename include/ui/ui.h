@@ -2,6 +2,10 @@
 #include <math.h>
 
 /*
+    User Info
+*/
+
+/*
     Before including the header you have to define thing's injected into the library below.
 
     Note header defines shall be the same for all affinelation units 
@@ -11,21 +15,32 @@
     ui.h implementation by first including ui.h without UI_IMPL (for ui_transform definition),
     and later with UI_IMPL (for implementation)
 
-    The coordinate system:
+    Render coordinate system:
              (0,  1)
     (-1, 0)           (1, 0)
              (0, -1)
 */
 
-#ifndef UI_H
-#define UI_H
+#ifdef UI_IMPL
+
+void ui_draw_box(void* ctx, const ui_transform* matrix, const void* data);
+void ui_draw_img(void* ctx, const ui_transform* matrix, const void* data); 
+void ui_draw_txt(void* ctx, const ui_transform* matrix, const void* data);
+void ui_draw_geo(void* ctx, const ui_transform* matrix, const void* data);
+
+#endif
 
 /*
     Header
 */
 
+#ifndef UI_H
+#define UI_H
+
 // ===========================
 // Typedefs
+
+typedef unsigned int ui_size;
 
 // structure representing ui elements tranformations (matrix 2x3)
 typedef struct ui_transform {
@@ -36,8 +51,8 @@ typedef struct ui_transform {
 typedef enum ui_node_type : char {
     // Special
 
-    ui_node_data_off,  // offsets data reads by own data
-    ui_node_transform, // render transform
+    ui_node_data_off,         // offsets data reads by own data
+    ui_node_render_transform, // render transform
 
     // Primitives
 
@@ -50,32 +65,28 @@ typedef enum ui_node_type : char {
     ui_node_padding,   // padding layout primitive
 
     // Layouts
-
     ui_node_row,       // row    layout
     ui_node_column,    // column layout
-    ui_node_canvas,    // canvas layout
+
 } ui_node_type;
 
 typedef enum ui_node_flag : char {
     ui_flag_none = 0,
 } ui_node_flag;
 
-typedef unsigned int ui_size;
-
 typedef struct ui_node {
-    ui_node_type type;
-    ui_node_flag flags;
-
+    ui_node_type    type;
+    ui_node_flag    flags;
     ui_size         child_count;
     struct ui_node* children;
-
-    void* data;
+    void*           data;
 } ui_node;
 
 typedef struct ui_spacer_data {
-    float width;
+    float precent; // precent of current layout space
 } ui_spacer_data;
 
+// all cords = precent of curent layout space
 typedef struct ui_padding_data {
     float left;
     float right;
@@ -84,17 +95,14 @@ typedef struct ui_padding_data {
 } ui_padding_data;
 
 typedef struct ui_row_data {
-    float spacing;
+    float    spacing;
+    ui_size* proportions;
 } ui_row_data;
 
 typedef struct ui_column_data {
     float spacing;
+    ui_size* proportions;
 } ui_column_data;
-
-typedef struct ui_canvas_data {
-    float width;
-    float height;
-} ui_canvas_data;
 
 // Default ui element transform
 // offset: (0, 0), scale: (1, 1), rotation: (0)
@@ -234,149 +242,123 @@ static inline ui_transform ui_mul(ui_transform p, ui_transform c) {
 
 #endif
 
-#ifdef UI_IMPL
-
-/*
-    Implementation Injections
-    Must be definied before inclusion with UI_IMPL
-*/
-
-void ui_draw_box(void* ctx, const ui_transform* matrix, const void* data);
-void ui_draw_img(void* ctx, const ui_transform* matrix, const void* data); 
-void ui_draw_txt(void* ctx, const ui_transform* matrix, const void* data);
-void ui_draw_geo(void* ctx, const ui_transform* matrix, const void* data);
-
 /*
     Implementation
 */
 
+#ifdef UI_IMPL
+
+static ui_transform ui_draw_dispatch(void* ctx, const ui_node* node, ui_transform world);
+
+static inline void ui_draw_row(void* ctx, const ui_node* node, ui_transform world) {
+    float x_left  = -1.0f;
+    float x_right =  1.0f;
+
+    size_t n = node->child_count;
+
+    // find total spacer width
+    float  total_spacer_width = 0.0f;
+    size_t flexible_count = 0;
+
+    for (size_t i = 0; i < n; i++) {
+        const ui_node* child = &node->children[i];
+        if (child->type == ui_node_spacer) total_spacer_width += (((ui_spacer_data*)(child->data))->precent * 2.0f);
+        else flexible_count++;
+    }
+
+    float remaining_width = (x_right - x_left) - total_spacer_width;
+
+    // layout children
+    for (size_t i = 0; i < n; i++) {
+        const ui_node* child = &node->children[i];
+
+        ui_transform local_trs = ui_default_trans;
+
+        if (child->type == ui_node_spacer) {
+            x_left += ((ui_spacer_data*)(child->data))->precent * 2.0f;
+            continue;
+        }
+
+        // allocate equal width among flexible children
+        float child_width = remaining_width / flexible_count;
+
+        float x_center = x_left + child_width / 2.0f;
+
+        local_trs = ui_off(local_trs, x_center, 0);
+        local_trs = ui_sca(local_trs, child_width / 2.0f, 1.0f);
+
+        ui_draw_dispatch(ctx, child, ui_mul(world, local_trs));
+
+        x_left += child_width; // move left edge
+        flexible_count--;
+        remaining_width -= child_width;
+    }
+}
+
+static inline void ui_draw_col(void* ctx, const ui_node* node, ui_transform world) {
+    // Local vertical space in panel coordinates [-1, 1]
+    float y_top = 1.0f;
+    float y_bottom = -1.0f;
+
+    size_t n = node->child_count;
+    for (size_t i = 0; i < n; i++) {
+        const ui_node* child = &node->children[i];
+
+        // Compute how much vertical space this child can get
+        float remaining_height = y_top - y_bottom;
+
+        // Allocate proportional share (simple equal division here)
+        float child_height = remaining_height / (n - i);
+
+        // Compute center y for this child in local panel space
+        float y_center = y_top - child_height / 2.0f;
+
+        // Child transform in panel-local coordinates
+        ui_transform local_trs = ui_default_trans;
+
+        // Translate to child’s vertical position
+        local_trs = ui_off(local_trs, 0, y_center);
+
+        // Scale child vertically to fit allocated height
+        local_trs = ui_sca(local_trs, 1.0f, child_height / 2.0f);
+
+        // Draw child with parent world transform applied
+        ui_transform used_space = ui_draw_dispatch(ctx, child, ui_mul(world, local_trs));
+
+        // Move y_top down for next child in local panel space
+        y_top -= child_height;
+    }
+}
+
 // the in transform is the world transform Mx
 // the returned value is local ...
-static ui_transform ui_draw_node(void* ctx, const ui_node* node, ui_transform world) {
+static ui_transform ui_draw_dispatch(void* ctx, const ui_node* node, ui_transform world) {
     switch (node->type) {
         // Transfrom
-        case ui_node_transform: {
+        case ui_node_render_transform: {
             ui_transform new_world = ui_mul(world, *(ui_transform*)(node->data));
             for (size_t i = 0; i < node->child_count; i++) {
                 const ui_node* child = &node->children[i];
-                ui_draw_node(ctx, child, new_world);
+                ui_draw_dispatch(ctx, child, new_world);
             }
         } break;
 
         // Primitives
-        case ui_node_box: ui_draw_box(ctx, &world, node->data);                   break;   
+        case ui_node_box: ui_draw_box(ctx, &world, node->data); break;   
         case ui_node_img: ui_draw_img(ctx, &world, node->data); break;
         case ui_node_txt: ui_draw_txt(ctx, &world, node->data); break;
         case ui_node_geo: ui_draw_geo(ctx, &world, node->data); break;
 
         // Panels
-        case ui_node_row: {
-            float x_left  = -1.0f;
-            float x_right =  1.0f;
-
-            size_t n = node->child_count;
-
-            // Step 1: Compute total spacer width
-            float total_spacer_width = 0.0f;
-            size_t flexible_count = 0;
-
-            for (size_t i = 0; i < n; i++) {
-                const ui_node* child = &node->children[i];
-                if (child->type == ui_node_spacer) {
-                    //total_spacer_width += child->spacer.width;
-                } 
-                else {
-                    flexible_count++;
-                }
-            }
-
-            float remaining_width = (x_right - x_left) - total_spacer_width;
-
-            // Step 2: Layout children
-            for (size_t i = 0; i < n; i++) {
-                const ui_node* child = &node->children[i];
-
-                ui_transform local_trs = ui_default_trans;
-
-                if (child->type == ui_node_spacer) {
-                    // Advance x_left by spacer width
-                    //x_left += child->spacer.width;
-                    //continue; // spacers are invisible
-                }
-
-                // Allocate equal width among flexible children
-                float child_width = remaining_width / flexible_count;
-
-                float x_center = x_left + child_width / 2.0f;
-
-                local_trs = ui_off(local_trs, x_center, 0);
-                local_trs = ui_sca(local_trs, child_width / 2.0f, 1.0f);
-
-                ui_draw_node(ctx, child, ui_mul(world, local_trs));
-
-                x_left += child_width; // move left edge
-                flexible_count--;
-                remaining_width -= child_width;
-            }
-        } break;
-
-        case ui_node_column: {
-            // Local vertical space in panel coordinates [-1, 1]
-            float y_top = 1.0f;
-            float y_bottom = -1.0f;
-
-            size_t n = node->child_count;
-            for (size_t i = 0; i < n; i++) {
-                const ui_node* child = &node->children[i];
-
-                // Compute how much vertical space this child can get
-                float remaining_height = y_top - y_bottom;
-
-                // Allocate proportional share (simple equal division here)
-                float child_height = remaining_height / (n - i);
-
-                // Compute center y for this child in local panel space
-                float y_center = y_top - child_height / 2.0f;
-
-                // Child transform in panel-local coordinates
-                ui_transform local_trs = ui_default_trans;
-
-                // Translate to child’s vertical position
-                local_trs = ui_off(local_trs, 0, y_center);
-
-                // Scale child vertically to fit allocated height
-                local_trs = ui_sca(local_trs, 1.0f, child_height / 2.0f);
-
-                // Draw child with parent world transform applied
-                ui_transform used_space = ui_draw_node(ctx, child, ui_mul(world, local_trs));
-
-                // Move y_top down for next child in local panel space
-                y_top -= child_height;
-            }
-        } break;
-
-        /*case ui_node_canvas: {
-            size_t n = node->panel.count;
-            for (size_t i = 0; i < n; i++) {
-                const ui_node* child = &node->panel.children[i];
-                ui_draw_node(ctx, child, world);
-            }
-        } break;
-
-        case ui_node_overlay: {
-            size_t n = node->panel.count;
-            for (size_t i = 0; i < n; i++) {
-                const ui_node* child = &node->panel.children[i];
-                ui_draw_node(ctx, child, world);
-            }
-        }*/
+        case ui_node_row:    ui_draw_row(ctx, node, world); break;
+        case ui_node_column: ui_draw_col(ctx, node, world); break;
     }
 
     return world;
 }
 
 void ui_draw(void* ctx, const ui_node* node) {
-    ui_draw_node(ctx, node, ui_default_trans); // begin rendering with full screen
+    ui_draw_dispatch(ctx, node, ui_default_trans); // begin rendering with full screen
 }
 
 #endif
