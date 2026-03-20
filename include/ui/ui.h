@@ -266,10 +266,10 @@ typedef struct ui_column_data {
 typedef struct ui_input_box_data {
     ui_input_callback input_callback;
 
-    // own cached, do not use
-    ui_transform transform;
-    char         was_pressed;
-    char         was_inside;
+    // private data, do not use
+    ui_transform private_transform;
+    char         private_was_pressed;
+    char         private_was_inside;
 } ui_input_box_data;
 
 // ===========================
@@ -574,7 +574,7 @@ static inline void draw_column(const ui_draw_context* dctx, const ui_node* node,
 
 static void draw_input_box(const ui_draw_context* dctx, const ui_node* node, ui_transform world, void* uctx) {
     ui_input_box_data* data = node->data;
-    data->transform = world;
+    data->private_transform = world;
 
     for (size_t i = 0; i < node->child_count; i++) {
         const ui_node* child = &node->children[i];
@@ -671,15 +671,15 @@ static inline void input_input_box(const ui_input_context* ictx, const ui_node* 
     ui_input_box_data* data = node->data;
     if (!data->input_callback) return;
 
-    int inside     = point_in_box(ictx, &data->transform);
+    int inside     = point_in_box(ictx, &data->private_transform);
     int mouse_down = ictx->mouse_left_down;
 
     // hover enter 
-    if (inside && !data->was_inside) {
+    if (inside && !data->private_was_inside) {
         data->input_callback(ictx, node, ui_input_event_enter);
     }
     // hover leave 
-    else if (!inside && data->was_inside) {
+    else if (!inside && data->private_was_inside) {
         data->input_callback(ictx, node, ui_input_event_leave);
     }
     // hover (only if not entering this frame) 
@@ -688,17 +688,17 @@ static inline void input_input_box(const ui_input_context* ictx, const ui_node* 
     }
 
     // mouse down (press start) 
-    if (inside && mouse_down && !data->was_pressed) {
-        data->was_pressed = 1;
+    if (inside && mouse_down && !data->private_was_pressed) {
+        data->private_was_pressed = 1;
         data->input_callback(ictx, node, ui_input_event_mouse_down);
     }
     // mouse held (only if not just pressed this frame) 
-    else if (data->was_pressed && mouse_down) {
+    else if (data->private_was_pressed && mouse_down) {
         data->input_callback(ictx, node, ui_input_event_mouse_held);
     }
     // mouse up 
-    else if (data->was_pressed && !mouse_down) {
-        data->was_pressed = 0;
+    else if (data->private_was_pressed && !mouse_down) {
+        data->private_was_pressed = 0;
         data->input_callback(ictx, node, ui_input_event_mouse_up);
     }
 
@@ -708,7 +708,7 @@ static inline void input_input_box(const ui_input_context* ictx, const ui_node* 
     }
 
     // update hover state 
-    data->was_inside = inside;
+    data->private_was_inside = inside;
 }
 
 void input_dispatch(const ui_input_context* ictx, const ui_node* node, void* uctx) {
