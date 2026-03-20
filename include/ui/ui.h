@@ -190,10 +190,10 @@ typedef struct ui_row_data {
 // Column
 
 typedef enum ui_column_flag {
-    ui_column_flag_allign_top     = 0, 
-    ui_column_flag_allign_center  = 1, 
-    ui_column_flag_allign_bottom  = 2,
-    ui_column_flag_allign_justify = 3,
+    ui_column_flag_align_top     = 0, 
+    ui_column_flag_align_center  = 1, 
+    ui_column_flag_align_bottom  = 2,
+    ui_column_flag_align_justify = 3,
 
     ui_column_flag_not_uniform_height = 4,
 } ui_column_flag;
@@ -432,7 +432,7 @@ static inline void draw_row(const ui_draw_context* dctx, const ui_node* node, ui
         case ui_row_flag_align_left:    x_cursor = x_left;                                    break;
         case ui_row_flag_align_center:  x_cursor = x_left + (total_width - total_size) *0.5f; break;
         case ui_row_flag_align_right:   x_cursor = x_left + (total_width - total_size);       break;
-        case ui_row_flag_align_justify: x_cursor = x_left;
+        case ui_row_flag_align_justify: x_cursor = x_left;                                    break;
     }
 
     // layout children
@@ -475,7 +475,7 @@ static inline void draw_column(const ui_draw_context* dctx, const ui_node* node,
 
     // calculate spacing size
     float spacing, total_spacing;
-    if ((data->flags & 0x3) != ui_column_flag_allign_justify) {
+    if ((data->flags & 0x3) != ui_column_flag_align_justify) {
         spacing       = length_to_layout(data->spacing, dctx->resolution_y);
         total_spacing = spacing * (node->child_count - 1);
     }
@@ -491,10 +491,10 @@ static inline void draw_column(const ui_draw_context* dctx, const ui_node* node,
     // find starting point, based on alligment
     float y_cursor = y_top;
     switch (data->flags & 0x3) {
-        case ui_column_flag_allign_top:     y_cursor = y_top;                                       break;
-        case ui_column_flag_allign_center:  y_cursor = y_top - (total_height - total_size) * 0.5f;  break;
-        case ui_column_flag_allign_bottom:  y_cursor = y_bottom + total_children;                   break;
-        case ui_column_flag_allign_justify: y_cursor = y_top;
+        case ui_column_flag_align_top:     y_cursor = y_top;                                       break;
+        case ui_column_flag_align_center:  y_cursor = y_top - (total_height - total_size) * 0.5f;  break;
+        case ui_column_flag_align_bottom:  y_cursor = y_bottom + total_children;                   break;
+        case ui_column_flag_align_justify: y_cursor = y_top;                                       break;
     }
 
     // layout children
