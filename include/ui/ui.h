@@ -77,7 +77,7 @@ static const ui_transform ui_default_trans = {
 
 typedef enum ui_node_type : char {
     // instance
-    //   offsets data reads by own data
+    //  offsets data reads by own data
     //  unimplemented!
     ui_node_instance,
 
@@ -97,7 +97,7 @@ typedef enum ui_node_type : char {
     ui_node_blank,
 
     // padding layout primitive
-    //  unimplemented!
+    //  it's children are drawn padded by lengths from *data
     ui_node_padding,
 
     // box render primitive
