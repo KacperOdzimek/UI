@@ -37,7 +37,48 @@ void ui_draw_geo(const ui_transform* matrix, const void* data, void* user_contex
 #define UI_H
 
 // ===========================
-// Typedefs
+// Api Typedefs
+
+typedef struct ui_draw_context {
+    unsigned int resolution_x;
+    unsigned int resolution_y;
+} ui_draw_context;
+
+typedef enum ui_input_event_type {
+    ui_input_event_enter,
+    ui_input_event_leave,
+    ui_input_event_hover,
+
+    ui_input_event_mouse_down,
+    ui_input_event_mouse_held,
+    ui_input_event_mouse_up,
+    
+    ui_input_event_scroll
+} ui_input_event_type;
+
+typedef struct ui_input_context {
+    char         mouse_left_down;
+    char         mouse_right_down;
+
+    float        scroll_change;
+
+    unsigned int mouse_position_x;
+    unsigned int mouse_position_y;
+
+    unsigned int resolution_x;
+    unsigned int resolution_y;
+} ui_input_context;
+
+typedef struct ui_node ui_node;
+
+typedef void(*ui_input_callback)(
+    const ui_input_context* ictx, 
+    const ui_node*          node, 
+    ui_input_event_type     event_type
+);
+
+// ===========================
+// Node Typedefs
 
 typedef enum ui_length_type {
     ui_length_pixels = 0,
@@ -222,33 +263,6 @@ typedef struct ui_column_data {
     ui_column_flag flags;
 } ui_column_data;
 
-typedef enum ui_input_event_type {
-    ui_input_event_enter,
-    ui_input_event_leave,
-    ui_input_event_hover,
-
-    ui_input_event_mouse_down,
-    ui_input_event_mouse_held,
-    ui_input_event_mouse_up,
-    
-    ui_input_event_scroll
-} ui_input_event_type;
-
-typedef struct ui_input_context {
-    char         mouse_left_down;
-    char         mouse_right_down;
-
-    float        scroll_change;
-
-    unsigned int mouse_position_x;
-    unsigned int mouse_position_y;
-
-    unsigned int resolution_x;
-    unsigned int resolution_y;
-} ui_input_context;
-
-typedef void(*ui_input_callback)(const ui_input_context* ictx, const ui_node* node, ui_input_event_type event_type);
-
 typedef struct ui_input_box_data {
     ui_input_callback input_callback;
 
@@ -257,11 +271,6 @@ typedef struct ui_input_box_data {
     char         was_pressed;
     char         was_inside;
 } ui_input_box_data;
-
-typedef struct ui_draw_context {
-    unsigned int resolution_x;
-    unsigned int resolution_y;
-} ui_draw_context;
 
 // ===========================
 // Methods
@@ -665,43 +674,40 @@ static inline void input_input_box(const ui_input_context* ictx, const ui_node* 
     int inside     = point_in_box(ictx, &data->transform);
     int mouse_down = ictx->mouse_left_down;
 
-    // --- hover enter ---
+    // hover enter 
     if (inside && !data->was_inside) {
         data->input_callback(ictx, node, ui_input_event_enter);
     }
-    // --- hover leave ---
+    // hover leave 
     else if (!inside && data->was_inside) {
         data->input_callback(ictx, node, ui_input_event_leave);
     }
-    // --- hover (only if not entering this frame) ---
+    // hover (only if not entering this frame) 
     else if (inside) {
         data->input_callback(ictx, node, ui_input_event_hover);
     }
 
-
-    // --- mouse down (press start) ---
+    // mouse down (press start) 
     if (inside && mouse_down && !data->was_pressed) {
         data->was_pressed = 1;
         data->input_callback(ictx, node, ui_input_event_mouse_down);
     }
-    // --- mouse held (only if not just pressed this frame) ---
+    // mouse held (only if not just pressed this frame) 
     else if (data->was_pressed && mouse_down) {
         data->input_callback(ictx, node, ui_input_event_mouse_held);
     }
-    // --- mouse up ---
+    // mouse up 
     else if (data->was_pressed && !mouse_down) {
         data->was_pressed = 0;
         data->input_callback(ictx, node, ui_input_event_mouse_up);
     }
 
-
-    // --- scroll (independent) ---
+    // scroll
     if (inside && ictx->scroll_change != 0.0f) {
         data->input_callback(ictx, node, ui_input_event_scroll);
     }
 
-
-    // --- update hover state ---
+    // update hover state 
     data->was_inside = inside;
 }
 
