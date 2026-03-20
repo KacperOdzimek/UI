@@ -76,32 +76,55 @@ static const ui_transform ui_default_trans = {
 };
 
 typedef enum ui_node_type : char {
-    // Instancing
+    // instance
+    //   offsets data reads by own data
+    //  unimplemented!
+    ui_node_instance,
 
-    // unimplemented!
-    ui_node_instance,         // offsets data reads by own data
+    // render tranform
+    //  all of it's children are drawn transformed by
+    //  ui_transform matrix at *data
+    ui_node_render_transform,
 
-    // Render
-    ui_node_render_transform, // render transform
+    // render clip
+    //  unimplemented!
+    ui_node_render_clip,
 
-    // unimplemented!
-    ui_node_render_clip,      // clipping space
+    // blank layout primitive
+    //  does not render anything
+    //  it's children are drawn with same transform
+    //  may be used as a spacer primitive
+    ui_node_blank,
 
-    // Primitives
+    // padding layout primitive
+    //  unimplemented!
+    ui_node_padding,   
 
-    ui_node_box,       // box    render primitive
-    ui_node_img,       // image  render primitive
-    ui_node_txt,       // text   render primitive
-    ui_node_geo,       // custom render primitive
+    // box render primitive
+    //  it's children are drawn with same transform
+    //  rendered with user provided ui_draw_box
+    ui_node_box,
 
-    ui_node_spacer,    // spacer  layout primitive
+    // image render primitive
+    //  it's children are drawn with same transform
+    //  rendered with user provided ui_draw_img
+    ui_node_img,
 
-    // unimplemented!
-    ui_node_padding,   // padding layout primitive
+    // text render primitive
+    //  it's children are drawn with same transform
+    //  rendered with user provided ui_draw_txt
+    ui_node_txt,
 
-    // Layouts
-    ui_node_row,       // row    layout
-    ui_node_column,    // column layout
+    // custom geometry render primitive
+    //  it's children are drawn with same transform
+    //  rendered with user provided ui_draw_geo
+    ui_node_geo,
+
+    // row layout
+    ui_node_row,
+    
+    // column layout
+    ui_node_column,
 } ui_node_type;
 
 typedef enum ui_node_flag : char {
@@ -135,33 +158,30 @@ typedef struct ui_padding_data {
     float bottom;
 } ui_padding_data;
 
-// Canvas
-
-typedef struct ui_canvas_data {
-
-} ui_canvas_data;
-
 // Row
 
 typedef enum ui_row_flag {
-    ui_row_flag_align_left   = 0,
-    ui_row_flag_align_center = 1,
-    ui_row_flag_align_right  = 2,
+    ui_row_flag_align_left    = 0,
+    ui_row_flag_align_center  = 1,
+    ui_row_flag_align_right   = 2,
+    ui_row_flag_align_justify = 3,
 
-    ui_row_flag_uniform_width = 4,
+    ui_row_flag_not_uniform_width = 4,
 } ui_row_flag;
 
 typedef struct ui_row_data {
     // spacing between elements
+    // ignored, if ui_row_flag_align_justify is active
+    // if the spacing is automatic to fill entire row
     ui_length spacing;
 
     union {
         // uniform width for all children 
-        // (used if ui_row_flag_uniform_width flag active)
+        // (used if not flag ui_row_flag_not_uniform_width)
         ui_length  width;
 
         // children widths array 
-        // (used if not ui_row_flag_uniform_width flag active)
+        // (used if flag ui_row_flag_not_uniform_width)
         ui_length* widths;
     };
 
@@ -174,9 +194,10 @@ typedef struct ui_row_data {
 typedef enum ui_column_flag {
     ui_column_flag_allign_top     = 0, 
     ui_column_flag_allign_center  = 1, 
-    ui_column_flag_allign_bottom  = 3,
+    ui_column_flag_allign_bottom  = 2,
+    ui_column_flag_allign_justify = 3,
 
-    ui_column_flag_uniform_height = 4,
+    ui_column_flag_not_uniform_height = 4,
 } ui_column_flag;
 
 typedef struct ui_column_data {
@@ -185,11 +206,11 @@ typedef struct ui_column_data {
 
     union {
         // uniform height for all children 
-        // (used if ui_column_flag_uniform_height flag active)
+        // (used if not ui_column_flag_not_uniform_height)
         ui_length  height;
 
         // children heights array 
-        // (used if not ui_column_flag_uniform_height flag active)
+        // (used if ui_column_flag_not_uniform_height)
         ui_length* heights;
     };
     
@@ -347,6 +368,7 @@ static inline float length_to_layout(ui_length l, unsigned int axis_pixels) {
 static void draw_dispatch(const ui_draw_context* dctx, const ui_node* node, ui_transform world, void* uctx);
 
 static inline void draw_row(const ui_draw_context* dctx, const ui_node* node, ui_transform world, void* uctx) {
+    if (!node->child_count) return; // return to avoid 0 divisions
     const ui_row_data* data = node->data;
 
     // local coordinate system
@@ -354,33 +376,42 @@ static inline void draw_row(const ui_draw_context* dctx, const ui_node* node, ui
     const float x_left      = 0.0f;
     const float x_right     = 1.0f;
 
-    // calculate spacing size
-    float spacing       = length_to_layout(data->spacing, dctx->resolution_x);
-    float total_spacing = spacing * (node->child_count - 1);
-
     // calculate children size
     float total_children = 0.0f;
-    if (data->flags & ui_row_flag_uniform_width) {
+    if (!(data->flags & ui_row_flag_not_uniform_width)) {
         total_children = length_to_layout(data->width, dctx->resolution_x) * node->child_count;
     }
     else for (size_t i = 0; i < node->child_count; i++) {
         total_children += length_to_layout(data->widths[i], dctx->resolution_x);
     }
 
+    // calculate spacing size
+    float spacing, total_spacing;
+    if ((data->flags & 0x3) != ui_row_flag_align_justify) {
+        spacing       = length_to_layout(data->spacing, dctx->resolution_x);
+        total_spacing = spacing * (node->child_count - 1);
+    }
+    else {
+        total_spacing = total_width - total_children;
+        if (total_spacing < 0) total_spacing = 0.0f;
+        spacing = total_spacing / (node->child_count - 1);
+    }
+
     // calculate total size
     float total_size = total_spacing + total_children;
 
     // find starting point, based on alligment
-    float x_cursor = x_left;
+    float x_cursor;
     switch (data->flags & 0x3) {
-        case ui_row_flag_align_left:   x_cursor = x_left;                                   break;
-        case ui_row_flag_align_center: x_cursor = x_left + (total_width - total_size)*0.5f; break;
-        case ui_row_flag_align_right:  x_cursor = x_left + (total_width - total_size);      break;
+        case ui_row_flag_align_left:    x_cursor = x_left;                                    break;
+        case ui_row_flag_align_center:  x_cursor = x_left + (total_width - total_size) *0.5f; break;
+        case ui_row_flag_align_right:   x_cursor = x_left + (total_width - total_size);       break;
+        case ui_row_flag_align_justify: x_cursor = x_left;
     }
 
     // layout children
     for (size_t i = 0; i < node->child_count; i++) {
-        ui_length len = data->flags & ui_row_flag_uniform_width ? data->width : data->widths[i];
+        ui_length len = data->flags & ui_row_flag_not_uniform_width ? data->widths[i] : data->width;
 
         // convert length to layout units
         float width    = length_to_layout(len, dctx->resolution_x);
@@ -406,17 +437,25 @@ static inline void draw_column(const ui_draw_context* dctx, const ui_node* node,
     const float y_top        = 1.0f;
     const float y_bottom     = 0.0f;
 
-    // calculate spacing size
-    float spacing       = length_to_layout(data->spacing, dctx->resolution_y);
-    float total_spacing = spacing * (node->child_count - 1);
-
     // calculate children size
     float total_children = 0.0f;
-    if (data->flags & ui_column_flag_uniform_height) {
+    if (!(data->flags & ui_column_flag_not_uniform_height)) {
         total_children = length_to_layout(data->height, dctx->resolution_y) * node->child_count;
     }
     else for (size_t i = 0; i < node->child_count; i++) {
         total_children += length_to_layout(data->heights[i], dctx->resolution_y);
+    }
+
+    // calculate spacing size
+    float spacing, total_spacing;
+    if ((data->flags & 0x3) != ui_column_flag_allign_justify) {
+        spacing       = length_to_layout(data->spacing, dctx->resolution_y);
+        total_spacing = spacing * (node->child_count - 1);
+    }
+    else {
+        total_spacing = total_height - total_children;
+        if (total_spacing < 0) total_spacing = 0.0f;
+        spacing = total_spacing / (node->child_count - 1);
     }
 
     // calculate total size
@@ -428,11 +467,12 @@ static inline void draw_column(const ui_draw_context* dctx, const ui_node* node,
         case ui_column_flag_allign_top:     y_cursor = y_top;                                       break;
         case ui_column_flag_allign_center:  y_cursor = y_top - (total_height - total_size) * 0.5f;  break;
         case ui_column_flag_allign_bottom:  y_cursor = y_bottom + total_children;                   break;
+        case ui_column_flag_allign_justify: y_cursor = y_top;
     }
 
     // layout children
     for (size_t i = 0; i < node->child_count; i++) {
-        ui_length len = data->flags & ui_column_flag_uniform_height ? data->height : data->heights[i];
+        ui_length len = data->flags & ui_column_flag_not_uniform_height ? data->heights[i] : data->height;
 
         // convert length to layout units
         float heigth   = length_to_layout(len, dctx->resolution_y);
@@ -466,6 +506,7 @@ static void draw_dispatch(const ui_draw_context* dctx, const ui_node* node, ui_t
         case ui_node_img: ui_draw_img(&world, node->data, uctx); goto draw_primitive_children;
         case ui_node_txt: ui_draw_txt(&world, node->data, uctx); goto draw_primitive_children;
         case ui_node_geo: ui_draw_geo(&world, node->data, uctx); goto draw_primitive_children;
+        case ui_node_blank:
 
         // draw all children with same transformation
         draw_primitive_children:
@@ -476,7 +517,7 @@ static void draw_dispatch(const ui_draw_context* dctx, const ui_node* node, ui_t
         break;
 
         // Panels
-        case ui_node_row:    draw_row   (dctx,node, world, uctx); break;
+        case ui_node_row:    draw_row   (dctx, node, world, uctx); break;
         case ui_node_column: draw_column(dctx, node, world, uctx); break;
     }
 }
