@@ -100,7 +100,7 @@ typedef struct ui_node {
 
 typedef enum ui_sizebox_overwrite_flag {
     ui_sizebox_overwrite_none        = 0,
-    ui_sizebox_overwrite_all         = 255
+    ui_sizebox_overwrite_all         = 255,
 
     ui_sizebox_overwrite_width_des   = 1 << 0,
     ui_sizebox_overwrite_width_min   = 1 << 1,
@@ -110,7 +110,7 @@ typedef enum ui_sizebox_overwrite_flag {
     ui_sizebox_overwrite_height_des  = 1 << 4,
     ui_sizebox_overwrite_height_min  = 1 << 5,
     ui_sizebox_overwrite_height_max  = 1 << 6,
-    ui_sizebox_overwrite_height_flex = 1 << 7,
+    ui_sizebox_overwrite_height_flex = 1 << 7
 } ui_sizebox_overwrite_flag;
 
 typedef struct ui_sizebox_data {
@@ -432,6 +432,46 @@ typedef struct helper_transform_pack {
     ui_transform trans;
 } helper_transform_pack;
 
+// given transform, provide new transform in center of this one,
+// if flexing give maximum space (max(own, parent))
+// else aim for measurement desired dim, but keep own min and max, and parent max
+static inline helper_transform_pack helper_combine_pack_measurement(helper_transform_pack pack, ui_measurement mm) {
+    unsigned int given_width, given_height;
+   
+    // width
+    if (mm.width.flex == 0.0f) {
+        given_width = mm.width.des;                                    // pick a desired value
+        given_width = helper_min_ui(given_width, mm.width.max);        // own upper limit
+        given_width = helper_min_ui(given_width, pack.pixel_width);    // parent upper limit
+        given_width = helper_max_ui(given_width, mm.width.min);        // lower limit
+    }
+    else {
+        given_width = helper_min_ui(pack.pixel_width, mm.width.max);   // max(own limit, parent limit)
+    }
+
+    // height
+    if (mm.height.flex == 0.0f) {
+        given_height = mm.height.des;                                   // pick a desired value
+        given_height = helper_min_ui(given_height, mm.height.max);      // own upper limit
+        given_height = helper_min_ui(given_height, pack.pixel_height);  // parent upper limit
+        given_height = helper_max_ui(given_height, mm.height.min);      // lower limit
+    }
+    else {
+        given_height = helper_min_ui(pack.pixel_height, mm.height.max); // max(own limit, parent limit)
+    }
+
+    // scale
+    float scalex = (float)given_width  / pack.pixel_width;
+    float scaley = (float)given_height / pack.pixel_height;
+
+    // make transform
+    helper_transform_pack result;
+    result.trans        = ui_sca(pack.trans, scalex, scaley);
+    result.pixel_width  = given_width;
+    result.pixel_height = given_height;
+    return result;
+}
+
 // function dispatching rendering based on node type
 // ti   - tree context
 // node - current context
@@ -441,6 +481,17 @@ static size_t render_dispatch(
     ui_tree_info* ti, const ui_node* node, size_t idx, helper_transform_pack trs
 );
 
+// cause children to be drawn in it's center
+static size_t render_default(ui_tree_info* ti, const ui_node* node, size_t idx, helper_transform_pack trs) {
+    size_t nidx = idx + 1;
+    for (size_t i = 0; i < node->child_count; i++) {
+        const ui_node* child = &node->children[i];
+        ui_measurement child_desired = ti->measurements[nidx];
+        nidx = render_dispatch(ti, child, nidx, helper_combine_pack_measurement(trs, child_desired));
+    }
+    
+    return nidx;
+}
 
 static size_t render_dispatch(ui_tree_info* ti, const ui_node* node, size_t idx, helper_transform_pack trs) {
     switch (node->type) {
@@ -449,6 +500,8 @@ static size_t render_dispatch(ui_tree_info* ti, const ui_node* node, size_t idx,
         ui_injection_render_box(trs.trans, trs.pixel_width, trs.pixel_height, node->data, ti->user_context);
     } break;
     }
+
+    return render_default(ti, node, idx, trs);
 }
 
 void ui_render(ui_tree_info* ti) {
