@@ -433,7 +433,7 @@ typedef struct helper_transform_pack {
 } helper_transform_pack;
 
 // given transform, provide new transform in center of this one,
-// if flexing give maximum space (max(own, parent))
+// if flexing give maximum space (min(own, parent))
 // else aim for measurement desired dim, but keep own min and max, and parent max
 static inline helper_transform_pack helper_combine_pack_measurement(helper_transform_pack pack, ui_measurement mm) {
     unsigned int given_width, given_height;
@@ -493,8 +493,15 @@ static size_t render_default(ui_tree_info* ti, const ui_node* node, size_t idx, 
     return nidx;
 }
 
+// layout and render children in a row
+static size_t render_row(ui_tree_info* ti, const ui_node* node, size_t idx, helper_transform_pack trs) {
+    const ui_row_data* data = node->data;
+}
+
 static size_t render_dispatch(ui_tree_info* ti, const ui_node* node, size_t idx, helper_transform_pack trs) {
     switch (node->type) {
+    case ui_node_row: return render_row(ti, node, idx, trs);
+
     // for primitves call injected methods
     case ui_node_box: {
         ui_injection_render_box(trs.trans, trs.pixel_width, trs.pixel_height, node->data, ti->user_context);
