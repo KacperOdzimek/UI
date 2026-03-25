@@ -100,6 +100,7 @@ typedef struct ui_node {
 
 typedef enum ui_sizebox_overwrite_flag {
     ui_sizebox_overwrite_none        = 0,
+    ui_sizebox_overwrite_all         = 255
 
     ui_sizebox_overwrite_width_des   = 1 << 0,
     ui_sizebox_overwrite_width_min   = 1 << 1,
@@ -110,8 +111,6 @@ typedef enum ui_sizebox_overwrite_flag {
     ui_sizebox_overwrite_height_min  = 1 << 5,
     ui_sizebox_overwrite_height_max  = 1 << 6,
     ui_sizebox_overwrite_height_flex = 1 << 7,
-
-    ui_sizebox_overwrite_all          = 255
 } ui_sizebox_overwrite_flag;
 
 typedef struct ui_sizebox_data {
