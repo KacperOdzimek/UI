@@ -365,7 +365,7 @@ static size_t measure_row(ui_tree_info* ti, const ui_node* node, size_t idx) {
 
     ui_measurement own = {
         .width  = {0, 0, 0, 0.0f},
-        .height = {0, 0, 0, 0.0f}
+        .height = {0, 0, ui_inf_length, 0.0f}
     };
 
     size_t nidx = idx + 1;
@@ -379,8 +379,8 @@ static size_t measure_row(ui_tree_info* ti, const ui_node* node, size_t idx) {
 
         // overflow check, children are likely to return inf in max field
         // if so, clamp to inf
-        if (own.width.max + result->width.max < own.width.max) own.width.max  = ui_inf_length;
-        else                                                   own.width.max += result->width.max;
+        if (own.width.max == ui_inf_length || result->width.max) own.width.max  = ui_inf_length;
+        else own.width.max += result->width.max;
 
         // enable flex if child do flex
         if (result->width.flex != 0.0f) own.width.flex = 1.0f;
@@ -399,8 +399,7 @@ static size_t measure_row(ui_tree_info* ti, const ui_node* node, size_t idx) {
     own.width.min += spaces_count * data->spacing.min;
     
     size_t max_spacing = data->spacing.max == ui_inf_length ? ui_inf_length : spaces_count * data->spacing.max;
-    if (own.width.max + max_spacing < own.width.max) own.width.max = ui_inf_length;
-    else own.width.max += max_spacing;
+    if (own.width.max != ui_inf_length) own.width.max += max_spacing;
 
     // if spacing may grow enable flex
     if (data->spacing.flex != 0.0f) own.width.flex = 1.0f;
@@ -432,43 +431,59 @@ typedef struct helper_transform_pack {
     ui_transform trans;
 } helper_transform_pack;
 
-// given transform, provide new transform in center of this one,
-// if flexing give maximum space (min(own, parent))
+
+// if flexing give maximum space (max(min(own, parent), own lower limit))
 // else aim for measurement desired dim, but keep own min and max, and parent max
-static inline helper_transform_pack helper_combine_pack_measurement(helper_transform_pack pack, ui_measurement mm) {
-    unsigned int given_width, given_height;
-   
-    // width
-    if (mm.width.flex == 0.0f) {
-        given_width = mm.width.des;                                    // pick a desired value
-        given_width = helper_min_ui(given_width, mm.width.max);        // own upper limit
-        given_width = helper_min_ui(given_width, pack.pixel_width);    // parent upper limit
-        given_width = helper_max_ui(given_width, mm.width.min);        // lower limit
+static inline unsigned int helper_find_final_length(unsigned int parent, ui_length measured) {
+    unsigned int result;
+
+    if (measured.flex == 0.0f) {
+        result = measured.des;                          // pick a desired value
+        result = helper_min_ui(result, measured.max);   // own upper limit
+        result = helper_min_ui(result, parent);         // parent upper limit
+        result = helper_max_ui(result, measured.min);   // lower limit
     }
     else {
-        given_width = helper_min_ui(pack.pixel_width, mm.width.max);   // max(own limit, parent limit)
+        result = helper_min_ui(parent, measured.max);   // max(own limit, parent limit)
+        result = helper_max_ui(parent, measured.min);   // keep own lower limit
     }
 
-    // height
-    if (mm.height.flex == 0.0f) {
-        given_height = mm.height.des;                                   // pick a desired value
-        given_height = helper_min_ui(given_height, mm.height.max);      // own upper limit
-        given_height = helper_min_ui(given_height, pack.pixel_height);  // parent upper limit
-        given_height = helper_max_ui(given_height, mm.height.min);      // lower limit
-    }
-    else {
-        given_height = helper_min_ui(pack.pixel_height, mm.height.max); // max(own limit, parent limit)
+    return result;
+}
+
+static inline unsigned int helper_find_final_length_flexsum(
+    unsigned int parent, unsigned int parent_left_space, ui_length measured, float flexsum
+) {
+    unsigned int result = measured.des;
+
+    // if there is flex and space to distribute
+    if (flexsum > 0.0f && parent_left_space > 0 && measured.flex > 0.0f) {
+        float ratio = measured.flex / flexsum;
+        unsigned int extra = (unsigned int)(ratio * parent_left_space);
+        result += extra;
     }
 
-    // scale
-    float scalex = (float)given_width  / pack.pixel_width;
-    float scaley = (float)given_height / pack.pixel_height;
+    // clamp to [min, min(own max, parent)]
+    result = helper_min_ui(result, measured.max);
+    result = helper_min_ui(result, parent);
+    result = helper_max_ui(result, measured.min);
 
-    // make transform
+    return result;
+}
+
+// scales transform to desired size
+static inline helper_transform_pack helper_scale_pack_to_dim(helper_transform_pack pack, unsigned int pixels_width, unsigned int pixels_height) {
     helper_transform_pack result;
-    result.trans        = ui_sca(pack.trans, scalex, scaley);
-    result.pixel_width  = given_width;
-    result.pixel_height = given_height;
+
+    result.trans = ui_sca(
+        pack.trans, 
+        ((float)pixels_width / pack.pixel_width), 
+        ((float)pixels_height / pack.pixel_height)
+    );
+
+    result.pixel_width  = pixels_width;
+    result.pixel_height = pixels_height;
+
     return result;
 }
 
@@ -486,8 +501,12 @@ static size_t render_default(ui_tree_info* ti, const ui_node* node, size_t idx, 
     size_t nidx = idx + 1;
     for (size_t i = 0; i < node->child_count; i++) {
         const ui_node* child = &node->children[i];
-        ui_measurement child_desired = ti->measurements[nidx];
-        nidx = render_dispatch(ti, child, nidx, helper_combine_pack_measurement(trs, child_desired));
+        ui_measurement child_measure = ti->measurements[nidx];
+
+        unsigned int given_width  = helper_find_final_length(trs.pixel_width,  child_measure.width);
+        unsigned int given_height = helper_find_final_length(trs.pixel_height, child_measure.height);
+
+        nidx = render_dispatch(ti, child, nidx, helper_scale_pack_to_dim(trs, given_width, given_height));
     }
     
     return nidx;
@@ -496,6 +515,74 @@ static size_t render_default(ui_tree_info* ti, const ui_node* node, size_t idx, 
 // layout and render children in a row
 static size_t render_row(ui_tree_info* ti, const ui_node* node, size_t idx, helper_transform_pack trs) {
     const ui_row_data* data = node->data;
+    ui_measurement row_measure = ti->measurements[idx];
+    
+    // find out content size
+    // if given too much space, but flexing, helper takes all
+    // if given too little space, helper enforces own minimum
+    unsigned int content_width  = helper_find_final_length(trs.pixel_width,  row_measure.width);
+    unsigned int content_height = helper_find_final_length(trs.pixel_height, row_measure.height);
+
+    // find begining position
+    unsigned int cursor_align_right = trs.pixel_width - content_width;
+    unsigned int cursor = (cursor_align_right * data->align); // lerp from cursor aligned left (0) to right aligned
+
+    // find left space
+    unsigned int left_space = 0;
+    if (content_width  < trs.pixel_width) left_space = trs.pixel_width  - content_width;
+
+    // find flexes sum
+    float flexsum = 0.0f;
+    flexsum += data->spacing.flex; // include spacing
+
+    size_t nidx = idx + 1;
+    for (size_t i = 0; i < node->child_count; i++) {
+        const ui_measurement* m = &ti->measurements[nidx];
+        flexsum += m->width.flex;
+        nidx = ui_subtree(&node->children[i]) + nidx;
+    }
+    
+    // find spacer size
+    size_t spacers_count = node->child_count ? node->child_count - 1 : 0;
+
+    unsigned int spacing;
+    if (data->spacing.flex != 0.0f) {
+        spacing = helper_find_final_length_flexsum(trs.pixel_width, left_space, data->spacing, flexsum) / spacers_count;
+    }
+    else {
+        spacing = helper_find_final_length(trs.pixel_width - left_space, data->spacing);
+    }
+
+    // walk children
+
+    // cos nie tak tutaj
+    nidx = idx + 1;
+    for (size_t i = 0; i < node->child_count; i++) {
+        const ui_node* child = &node->children[i];
+        ui_measurement child_measure = ti->measurements[nidx];
+
+        unsigned int child_width = helper_find_final_length_flexsum(
+            trs.pixel_width, left_space, child_measure.width, flexsum
+        );
+
+        unsigned int child_height = helper_find_final_length(
+            trs.pixel_height, child_measure.height
+        );
+
+        float dx = (float)cursor / (float)trs.pixel_width;
+
+        helper_transform_pack child_trs = trs;
+        child_trs.trans = ui_off(child_trs.trans, dx, 0.0f);
+        child_trs = helper_scale_pack_to_dim(child_trs, child_width, child_height);
+        
+
+        nidx = render_dispatch(ti, child, nidx, child_trs);
+
+        cursor += child_width;
+        cursor += spacing;
+    }
+
+    return nidx;
 }
 
 static size_t render_dispatch(ui_tree_info* ti, const ui_node* node, size_t idx, helper_transform_pack trs) {
