@@ -67,7 +67,7 @@ static inline ui_transform ui_sca(ui_transform m, float sx, float sy);
 // rotate transform by degrees clockwise
 static inline ui_transform ui_rot(ui_transform m, float deg_cw);
 
-// UI_TRANS <- compile time ui_trans transform builder macro (later in the file)
+// UI_TRANS <- compile time ui_trans transform builder macro (define later in the file)
 
 // ===========================
 // Node Typedef
@@ -99,15 +99,17 @@ typedef struct ui_node {
 // sizebox
 
 typedef enum ui_sizebox_overwrite_flag {
-    ui_sizebox_overwrite_none       = 0,
+    ui_sizebox_overwrite_none        = 0,
 
-    ui_sizebox_overwrite_width_des  = 1 << 0,
-    ui_sizebox_overwrite_width_min  = 1 << 1,
-    ui_sizebox_overwrite_width_max  = 1 << 2,
+    ui_sizebox_overwrite_width_des   = 1 << 0,
+    ui_sizebox_overwrite_width_min   = 1 << 1,
+    ui_sizebox_overwrite_width_max   = 1 << 2,
+    ui_sizebox_overwrite_width_flex  = 1 << 3,
 
-    ui_sizebox_overwrite_height_des = 1 << 3,
-    ui_sizebox_overwrite_height_min = 1 << 4,
-    ui_sizebox_overwrite_height_max = 1 << 5,
+    ui_sizebox_overwrite_height_des  = 1 << 4,
+    ui_sizebox_overwrite_height_min  = 1 << 5,
+    ui_sizebox_overwrite_height_max  = 1 << 6,
+    ui_sizebox_overwrite_height_flex = 1 << 7
 } ui_sizebox_overwrite_flag;
 
 typedef struct ui_sizebox_data {
@@ -254,6 +256,7 @@ static inline ui_transform ui_mul(ui_transform p, ui_transform c) {
 
 // compile time tranformation matrix builder
 // transformation order: rotate, scale, translate
+// this macro may be a little slow to process, be aware
 #define UI_TRANS(offx, offy, scax, scay, deg_cw) \
     (ui_transform){ \
         .m00 = UI_COS_APPROX(UI_DEG_TO_RAD(deg_cw)) * (scax), \
@@ -334,13 +337,15 @@ static size_t measure_sizebox(ui_tree_info* ti, const ui_node* node, size_t idx)
     const ui_sizebox_data* data = node->data;
     ui_measurement*        own  = &ti->measurements[idx];
 
-    if (data->flag & ui_sizebox_overwrite_width_des)  own->width.des  = data->width.des;
-    if (data->flag & ui_sizebox_overwrite_width_min)  own->width.min  = data->width.min;
-    if (data->flag & ui_sizebox_overwrite_width_max)  own->width.max  = data->width.max;
+    if (data->flag & ui_sizebox_overwrite_width_des)   own->width.des   = data->width.des;
+    if (data->flag & ui_sizebox_overwrite_width_min)   own->width.min   = data->width.min;
+    if (data->flag & ui_sizebox_overwrite_width_max)   own->width.max   = data->width.max;
+    if (data->flag & ui_sizebox_overwrite_width_flex)  own->width.flex  = data->width.flex;
 
-    if (data->flag & ui_sizebox_overwrite_height_des) own->height.des = data->height.des;
-    if (data->flag & ui_sizebox_overwrite_height_min) own->height.min = data->height.min;
-    if (data->flag & ui_sizebox_overwrite_height_max) own->height.max = data->height.max;
+    if (data->flag & ui_sizebox_overwrite_height_des)  own->height.des  = data->height.des;
+    if (data->flag & ui_sizebox_overwrite_height_min)  own->height.min  = data->height.min;
+    if (data->flag & ui_sizebox_overwrite_height_max)  own->height.max  = data->height.max;
+    if (data->flag & ui_sizebox_overwrite_height_flex) own->height.flex = data->height.flex;
 
     return nidx;
 }
