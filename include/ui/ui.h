@@ -447,11 +447,11 @@ static void measure_dispatch(helper_measurement_walk_context* mc, const ui_node*
     mc->last_used_index     += node->child_count;
 
     switch (node->type) {
-    case ui_node_sizebox: return measure_sizebox(mc, node, idx, first_child_index);
-    case ui_node_row:     return measure_row    (mc, node, idx, first_child_index);
+    case ui_node_sizebox: measure_sizebox(mc, node, idx, first_child_index); return;
+    case ui_node_row:     measure_row    (mc, node, idx, first_child_index); return;
     }
 
-    return measure_span_on_children(mc, node, idx, first_child_index);
+    measure_span_on_children(mc, node, idx, first_child_index);
 }
 
 void ui_measure(ui_tree_info* ti) {
@@ -618,7 +618,7 @@ static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* no
     rc->last_used_index     += node->child_count;
 
     switch (node->type) {
-    case ui_node_row: return render_row(rc, node, idx, first_child_index, trs);
+    case ui_node_row: render_row(rc, node, idx, first_child_index, trs); return;
 
     // for primitves call injected methods
     case ui_node_box: {
@@ -626,7 +626,7 @@ static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* no
     } break;
     }
 
-    return render_default(rc, node, idx, first_child_index, trs);
+    render_default(rc, node, idx, first_child_index, trs);
 }
 
 void ui_render(ui_tree_info* ti) {
