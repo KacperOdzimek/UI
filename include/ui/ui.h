@@ -6,8 +6,8 @@
     typedef struct ui_transform ui_transform;
 
     static inline void ui_injection_render_box(
-        ui_transform transform, int  pixels_width, int  pixels_height, 
-        const void* box_data,   void* user_context
+        ui_transform transform, int pixels_width, int pixels_height, 
+        const void* box_data, void* user_context
     );
 #endif
 
@@ -137,8 +137,8 @@ typedef struct ui_measurement {
 typedef struct ui_tree_info {
     const ui_node*  root;
     ui_measurement* measurements;
-    int     resolution_x;
-    int     resolution_y;
+    int             resolution_x;
+    int             resolution_y;
     void*           user_context;
 } ui_tree_info;
 
@@ -288,12 +288,12 @@ size_t ui_subtree(const ui_node* node) {
 // Measuring
 
 // max(a, b)
-static inline int  helper_max_ui(int a, int b) {
+static inline int helper_max_ui(int a, int b) {
     return a > b ? a : b;
 }
 
 // min(a, b)
-static inline int  helper_min_ui(int a, int b) {
+static inline int helper_min_ui(int a, int b) {
     return a < b ? a : b;
 }
 
@@ -448,8 +448,8 @@ void ui_measure(ui_tree_info* ti) {
 //
 // This struct bundles both the transform and its associated pixel size.
 typedef struct helper_transform_pack {
-    int  pixel_width; 
-    int  pixel_height; 
+    int          pixel_width; 
+    int          pixel_height; 
     ui_transform trans;
 } helper_transform_pack;
 
@@ -465,7 +465,7 @@ typedef struct helper_transform_pack {
 // - Clamp to the container's own minimum size
 //     (may exceed the parent bounds).
 static inline int helper_find_pixels_taken_from_parent_on_axis(ui_length axis_measure, int parent_axis_given) {
-    int  result_axis_pixels;
+    int result_axis_pixels;
 
     // flexing -> take all space
     if (axis_measure.flex != 0.0f) {
