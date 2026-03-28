@@ -483,6 +483,23 @@ typedef struct helper_transform_pack {
     ui_transform trans;
 } helper_transform_pack;
 
+// Scales helper_transform_pack - transforms both
+// member transform matrix, and the pixel info, so both match each other
+static inline helper_transform_pack helper_scale_pack_to_dim(helper_transform_pack pack, int pixels_width, int pixels_height) {
+    helper_transform_pack result;
+
+    result.trans = ui_sca(
+        pack.trans, 
+        ((float)pixels_width / pack.pixel_width), 
+        ((float)pixels_height / pack.pixel_height)
+    );
+
+    result.pixel_width  = pixels_width;
+    result.pixel_height = pixels_height;
+
+    return result;
+}
+
 // Computes the MINIMUM size of a container within its parent, without regarding other children.
 // By MINIMUM size we mean: desired, but limited by parent, without thinking about flex
 //
@@ -494,7 +511,7 @@ typedef struct helper_transform_pack {
 //     (may leave unused space in the parent).
 // - Clamp to the container's own minimum size
 //     (may exceed the parent bounds).
-static inline int helper_find_min_dim_pixels_on_parent_axis(ui_length axis_measure, int parent_axis_given) {
+static inline int helper_content_axis_size_min(ui_length axis_measure, int parent_axis_given) {
     int result_axis_pixels;
 
     // take min(desired, available)
@@ -508,7 +525,7 @@ static inline int helper_find_min_dim_pixels_on_parent_axis(ui_length axis_measu
 }
 
 // Computes the MAXIMUM size of a container within its parent, without regarding other children.
-// (Same as helper_find_min_dim_pixels_on_parent_axis, but includes flexing behavior)
+// (Same as helper_content_axis_size_min, but includes flexing behavior)
 //
 // Sizing rules:
 // - If the container is flexible:      it takes all available space from the parent.
@@ -519,7 +536,7 @@ static inline int helper_find_min_dim_pixels_on_parent_axis(ui_length axis_measu
 //     (may leave unused space in the parent).
 // - Clamp to the container's own minimum size
 //     (may exceed the parent bounds).
-static inline int helper_find_max_dim_pixels_on_parent_axis(ui_length axis_measure, int parent_axis_given) {
+static inline int helper_content_axis_size_max(ui_length axis_measure, int parent_axis_given) {
     int result_axis_pixels;
 
     // flexing -> take all space
@@ -538,21 +555,30 @@ static inline int helper_find_max_dim_pixels_on_parent_axis(ui_length axis_measu
     return result_axis_pixels;
 }
 
-// Scales helper_transform_pack - transforms both
-// member transform matrix, and the pixel info, so both match each other
-static inline helper_transform_pack helper_scale_pack_to_dim(helper_transform_pack pack, int pixels_width, int pixels_height) {
-    helper_transform_pack result;
+// Finds pixels taken by a child inside a container distributing
+// leftover space among flexing childrens out of flexspace
+// This function assumes desired size of element is guaranteed
+// Sizing: min(own max, desired + distributed * (own flex / flexsum))
+static inline int helper_child_axis_size_expanded_in_flex(ui_length length, int distributed, float flexsum) {
+    if (flexsum == 0.0f) return 0;
+    int base  = length.des;
+    int extra = (distributed * (length.flex / flexsum));
+    int limit = helper_min_ui(base + extra, length.max);
+    return limit - base;
+}
 
-    result.trans = ui_sca(
-        pack.trans, 
-        ((float)pixels_width / pack.pixel_width), 
-        ((float)pixels_height / pack.pixel_height)
-    );
+// Returns sum of width flexes of given node's children
+static inline float helper_children_flexsum_width(const ui_measurement* measurements, size_t child_count, ui_node* children, size_t cidx) {
+    float flexsum = 0.0f;
+    for (size_t i = 0; i < child_count; i++) flexsum += measurements[cidx + i].width.flex;
+    return flexsum;
+}
 
-    result.pixel_width  = pixels_width;
-    result.pixel_height = pixels_height;
-
-    return result;
+// Returns sum of height flexes of given node's children
+static inline float helper_children_flexsum_height(const ui_measurement* measurements, size_t child_count, ui_node* children, size_t cidx) {
+    float flexsum = 0.0f;
+    for (size_t i = 0; i < child_count; i++) flexsum += measurements[cidx + i].height.flex;
+    return flexsum;
 }
 
 typedef struct helper_rendering_walk_context {
@@ -581,18 +607,18 @@ static void render_dispatch(
 static void render_default(helper_rendering_walk_context* rc, const ui_node* node, size_t idx, size_t cidx, helper_transform_pack trs) {
     ui_measurement own_measure = rc->measurements[idx];
 
-    int own_width  = helper_find_max_dim_pixels_on_parent_axis(own_measure.width,  trs.pixel_width);
-    int own_height = helper_find_max_dim_pixels_on_parent_axis(own_measure.height, trs.pixel_height);
+    int own_width  = helper_content_axis_size_max(own_measure.width,  trs.pixel_width);
+    int own_height = helper_content_axis_size_max(own_measure.height, trs.pixel_height);
 
     for (size_t i = 0; i < node->child_count; i++) {
         const ui_node* child = &node->children[i];
         ui_measurement child_measure = rc->measurements[cidx + i];
 
-        int given_width = helper_find_max_dim_pixels_on_parent_axis(
+        int given_width = helper_content_axis_size_max(
             child_measure.width, own_width
         );
 
-        int given_height = helper_find_max_dim_pixels_on_parent_axis(
+        int given_height = helper_content_axis_size_max(
             child_measure.height, own_height
         );
 
@@ -602,14 +628,88 @@ static void render_default(helper_rendering_walk_context* rc, const ui_node* nod
 
 // layout and render children in a row
 static void render_row(helper_rendering_walk_context* rc, const ui_node* node, size_t idx, size_t cidx, helper_transform_pack trs) {
-    ui_measurement row_measure = rc->measurements[idx];
+    const ui_row_data* data = node->data;
+    ui_measurement     row_measure = rc->measurements[idx];
 
-    // find minimum content sizes, [minimum, desired]
-    int minimum_content_width  = helper_find_min_dim_pixels_on_parent_axis(row_measure.width,  trs.pixel_width);
-    int minimum_content_height = helper_find_min_dim_pixels_on_parent_axis(row_measure.height, trs.pixel_height);
+    // find height
+    int total_height = helper_content_axis_size_max(row_measure.height, trs.pixel_height);
 
-    // find distributed width among children
-    int distributed_width = helper_find_max_dim_pixels_on_parent_axis(row_measure.width, trs.pixel_width) - minimum_content_width;
+    // find flexsum
+    float flexsum = helper_children_flexsum_width(rc->measurements, node->child_count, node->children, cidx);
+    flexsum += data->spacing.flex;
+
+    // elements will be shrinking from desired
+    if (row_measure.width.des > trs.pixel_width) {
+        // each element needs to be scaled times shrink ratio to fit
+        //float shrink_ratio = (float)minimum_content_width / trs.pixel_width;
+
+        //for (size_t i = 0; i < node->child_count; i++) {
+        //    const ui_node* child = &node->children[i];
+        //    ui_length      child_width = rc->measurements[cidx + i].width;
+
+            //unsigned int child_width_pixels
+        //}
+    }
+    // elements will be expanding from desired
+    else {
+        // find distributed width
+        int maximum_content_width = helper_content_axis_size_max(row_measure.width, trs.pixel_width);
+        int distributed_width     = maximum_content_width - row_measure.width.des;
+
+        // find cursor begining
+        float screen_cursor; {
+            float cursor_right_align_pixels = (float)trs.pixel_width - maximum_content_width;
+            float cursor_interp_pixels = cursor_right_align_pixels * data->align;
+            screen_cursor = 2.0f * (cursor_interp_pixels / trs.pixel_width) - 1.0f;
+        }
+
+        // find spacing
+        float screen_spacing; {
+            size_t spacings_count = node->child_count == 0 ? 0 : node->child_count - 1;
+
+            if (spacings_count != 0) {
+                // take flex
+                int extra_width = helper_child_axis_size_expanded_in_flex(data->spacing, distributed_width, flexsum) / spacings_count;
+                flexsum -= data->spacing.flex;
+                distributed_width -= extra_width;
+
+                // calculate screen spacing
+                int spacing_desired = data->spacing.des;
+                screen_spacing = (float)(spacing_desired + extra_width) / trs.pixel_width * 2.0f;
+            }
+        }
+
+        // render children
+        for (size_t i = 0; i < node->child_count; i++) {
+            const ui_node* child = &node->children[i];
+            const ui_measurement* child_measurement = &rc->measurements[cidx + i];
+
+            // take flex
+            int extra_width = helper_child_axis_size_expanded_in_flex(child_measurement->width, distributed_width, flexsum);
+            flexsum -= child_measurement->width.flex;
+            distributed_width -= extra_width;
+
+            // find child dimension in pixels
+            int child_width  = helper_max_ui(child_measurement->width.des + extra_width, child_measurement->width.min);
+            int child_height = helper_content_axis_size_max(child_measurement->height, trs.pixel_height);
+
+            // find child dimension on screen
+            float screen_child_width  = 2 * (float)child_width  / trs.pixel_width;
+            float screen_child_height = 2 * (float)child_height / trs.pixel_height;
+
+            // find child transformation
+            helper_transform_pack child_trs = trs;
+            child_trs.trans = ui_off(child_trs.trans, screen_cursor + screen_child_width / 2.0f, 0.0f);
+            child_trs = helper_scale_pack_to_dim(child_trs, child_width, child_height);
+
+            // render child
+            render_dispatch(rc, child, cidx + i, child_trs);
+
+            // move cursor
+            screen_cursor += screen_child_width;
+            screen_cursor += screen_spacing;
+        }
+    }
 }
 
 static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* node, size_t idx, helper_transform_pack trs) {
