@@ -392,7 +392,7 @@ static void measure_row(helper_measurement_walk_context* mc, const ui_node* node
 
     ui_measurement own = {
         .width  = {0, 0, 0.0f},
-        .height = {0, ui_inf_length, 0.0f}
+        .height = {0, 0, 0.0f}
     };
 
     for (size_t i = 0; i < node->child_count; i++) {
@@ -404,7 +404,7 @@ static void measure_row(helper_measurement_walk_context* mc, const ui_node* node
 
         // overflow check, children are likely to return inf in max field
         // if so, clamp to inf
-        if (own.width.max == ui_inf_length || result->width.max) own.width.max  = ui_inf_length;
+        if (own.width.max == ui_inf_length || result->width.max == ui_inf_length) own.width.max = ui_inf_length;
         else own.width.max += result->width.max;
 
         // enable flex if child do flex
@@ -578,7 +578,7 @@ static void render_row(helper_rendering_walk_context* rc, const ui_node* node, s
         }
 
         // find spacing
-        screen_spacing = (float)data->spacing.min / trs.pixel_width;
+        screen_spacing = 2 * (float)data->spacing.min / trs.pixel_width;
 
         // set left width to entire parent
         left_width = trs.pixel_width;
