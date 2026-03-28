@@ -75,7 +75,9 @@ static inline ui_transform ui_rot(ui_transform m, float deg_cw);
 
 typedef enum ui_node_type {
     ui_node_blank,
-    ui_node_sizebox, // push size constraint
+
+    ui_node_padding, // padds children by given amount of pixels
+    ui_node_sizebox, // pushes size constraint
 
     ui_node_row,     // row component 
     ui_node_box,     // box draw render primitive
@@ -94,6 +96,12 @@ typedef struct ui_node {
 
     const void*     data;
 } ui_node;
+
+// padding
+
+typedef struct ui_padding_data {
+    ui_length left, right, top, bottom;
+} ui_padding_data;
 
 // sizebox
 
@@ -337,7 +345,7 @@ static void measure_dispatch(helper_measurement_walk_context* mc, const ui_node*
 // - minimum = max minimum dim among children
 // - maximum = min maximum dim among children
 // - flex        = 1.0f (function meant for primitives like boxes that shall always span)
-static void measure_span_on_children(helper_measurement_walk_context* mc, const ui_node* node, size_t idx, size_t cidx) {
+static inline void measure_span_on_children(helper_measurement_walk_context* mc, const ui_node* node, size_t idx, size_t cidx) {
     ui_measurement own = {
         .width  = {0, ui_inf_length, 1.0f},
         .height = {0, ui_inf_length, 1.0f}
@@ -358,10 +366,26 @@ static void measure_span_on_children(helper_measurement_walk_context* mc, const 
     mc->measurements[idx] = own;
 }
 
+// Measure option for ui_node_padding in two steps:
+// - Measure children with 'measure_span_on_children'
+// - Extend each axis by padding
+static inline void measure_padding(helper_measurement_walk_context* mc, const ui_node* node, size_t idx, size_t cidx) {
+    measure_span_on_children(mc, node, idx, cidx);
+
+    const ui_padding_data* data = node->data;
+    ui_measurement*        own  = &mc->measurements[idx];
+
+    own->width.min  += data->left.min + data->right.min;
+    if (own->width.max != ui_inf_length) own->width.max  += data->left.max + data->right.max;
+
+    own->height.min += data->top.min + data->bottom.min;
+   if (own->height.max != ui_inf_length)  own->height.max += data->top.max + data->bottom.max;
+}
+
 // Measure option for ui_node_sizebox in two steps:
 // - Measure children with 'measure_span_on_children'
 // - Overwrite specified by data->flag fields with values from data
-static void measure_sizebox(helper_measurement_walk_context* mc, const ui_node* node, size_t idx, size_t cidx) {
+static inline void measure_sizebox(helper_measurement_walk_context* mc, const ui_node* node, size_t idx, size_t cidx) {
     measure_span_on_children(mc, node, idx, cidx);
 
     const ui_sizebox_data* data = node->data;
@@ -387,7 +411,7 @@ static void measure_sizebox(helper_measurement_walk_context* mc, const ui_node* 
 // - minimum = max over children
 // - maximum = max over children
 // - flex    = 1.0f if at least one child non zero flex else 0
-static void measure_row(helper_measurement_walk_context* mc, const ui_node* node, size_t idx, size_t cidx) {
+static inline void measure_row(helper_measurement_walk_context* mc, const ui_node* node, size_t idx, size_t cidx) {
     const ui_row_data* data = node->data;
 
     ui_measurement own = {
@@ -436,6 +460,7 @@ static void measure_dispatch(helper_measurement_walk_context* mc, const ui_node*
     mc->last_used_index     += node->child_count;
 
     switch (node->type) {
+    case ui_node_padding: measure_padding(mc, node, idx, first_child_index); return;
     case ui_node_sizebox: measure_sizebox(mc, node, idx, first_child_index); return;
     case ui_node_row:     measure_row    (mc, node, idx, first_child_index); return;
     }
@@ -534,7 +559,7 @@ static void render_dispatch(
 // - Rendering respects parent and child measurements
 // - If the node has multiple children, their subtrees are rendered
 //   sequentially on top of each other (overlapping in the same space).
-static void render_default(helper_rendering_walk_context* rc, const ui_node* node, size_t idx, size_t cidx, helper_transform_pack trs) {
+static inline void render_default(helper_rendering_walk_context* rc, const ui_node* node, size_t idx, size_t cidx, helper_transform_pack trs) {
     ui_measurement own_measure = rc->measurements[idx];
 
     int own_width  = helper_bound_length_in_parent(own_measure.width,  trs.pixel_width);
@@ -556,8 +581,57 @@ static void render_default(helper_rendering_walk_context* rc, const ui_node* nod
     }
 }
 
+// Render children padded
+// Each child is drawn separate, on top of previous
+// The padding may scale between [min, max]
+// But keep proportion in axis (between left and right, and top and bottom)
+static inline void render_padding(helper_rendering_walk_context* rc, const ui_node* node, size_t idx, size_t cidx, helper_transform_pack trs) {
+    const ui_padding_data* data = node->data;
+
+    for (size_t i = 0; i < node->child_count; i++) {
+        const ui_node* child = &node->children[i];
+        const ui_measurement* child_measurement = &rc->measurements[cidx + i];
+
+        int child_width  = child_measurement->width.min;
+        int child_height = child_measurement->height.min;
+
+        int free_width  = trs.pixel_width  - child_width;
+        free_width = helper_min(free_width, data->left.max + data->right.max);      // upper bound
+        free_width = helper_max(free_width, data->left.min + data->right.min);      // lower bound
+
+        int free_height = trs.pixel_height - child_height;
+        free_height = helper_min(free_height, data->left.max + data->right.max);    // upper bound
+        free_height = helper_max(free_height, data->top.min + data->bottom.min);    // lower bound
+
+        // for even scaling compare target padding sizes and scale along
+        int max_padding_width = data->left.max + data->right.max;
+        int left  = free_width * ((float)data->left.max  / max_padding_width);
+        int right = free_width * ((float)data->right.max / max_padding_width);
+
+        int max_padding_height = data->top.max + data->bottom.max;
+        int top    = free_height * ((float)data->top.max    / max_padding_height);
+        int bottom = free_height * ((float)data->bottom.max / max_padding_height);
+
+        // find offsets from center
+        float screen_to_right = (float)(left - right) / trs.pixel_width;
+        float screen_to_top   = (float)(bottom - top) / trs.pixel_width;
+
+        // build transform
+        helper_transform_pack child_trs = trs;
+        child_trs.trans = ui_off(child_trs.trans, screen_to_right, screen_to_top);
+        child_trs = helper_scale_pack_to_dim(
+            child_trs, 
+            trs.pixel_width - left - right, 
+            trs.pixel_height - top - bottom
+        );
+
+        // render child
+        render_dispatch(rc, child, cidx + i, child_trs);
+    }
+}
+
 // layout and render children in a row
-static void render_row(helper_rendering_walk_context* rc, const ui_node* node, size_t idx, size_t cidx, helper_transform_pack trs) {
+static inline void render_row(helper_rendering_walk_context* rc, const ui_node* node, size_t idx, size_t cidx, helper_transform_pack trs) {
     const ui_row_data* data = node->data;
     ui_measurement     row_measure = rc->measurements[idx];
 
@@ -655,7 +729,8 @@ static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* no
     rc->last_used_index     += node->child_count;
 
     switch (node->type) {
-    case ui_node_row: render_row(rc, node, idx, first_child_index, trs); return;
+    case ui_node_padding: render_padding(rc, node, idx, first_child_index, trs); return;
+    case ui_node_row:     render_row(rc, node, idx, first_child_index, trs);     return;
 
     // for primitves call injected methods
     case ui_node_box: {
