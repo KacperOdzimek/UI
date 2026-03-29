@@ -77,13 +77,12 @@ typedef enum ui_node_type {
 
     ui_node_instance, // sets instance pointer to value of data
 
-    // Render
+    // Transform
 
-    ui_node_render_transform,  // transforms children at render
+    ui_node_transform,  // transforms children
 
     // Basic Layout
 
-    ui_node_measure_transform, // transforms children at measure and render
     ui_node_blank,
     ui_node_padding, // padds children by given amount of pixels
     ui_node_sizebox, // pushes size constraint
@@ -122,17 +121,16 @@ typedef struct ui_node {
     };
 } ui_node;
 
-// render transform data
+// transform data
 
-typedef struct ui_render_transform_data {
-    ui_transform transform;
-} ui_render_transform_data;
+typedef struct ui_transform_data {
+    unsigned char   apply_transform_at_measure : 1;
+    unsigned char   apply_transform_at_render  : 1;
+    ui_transform    transform;
 
-// measure transform data
-
-typedef struct ui_measure_transform_data {
-    ui_transform transform;
-} ui_measure_transform_data;
+    unsigned char   set_depth_not_add  : 1;
+    int             new_depth;
+} ui_transform_data;
 
 // padding
 
@@ -470,10 +468,13 @@ static inline void measure_span_on_children(helper_measurement_walk_context* mc,
 static inline void measure_transform(helper_measurement_walk_context* mc, const ui_node* node, size_t idx, size_t cidx) {
     measure_span_on_children(mc, node, idx, cidx);
 
-    const ui_measure_transform_data* data = helper_get_data(node, mc->instance);
+    const ui_transform_data* data = helper_get_data(node, mc->instance);
     ui_measurement* own = &mc->measurements[idx];
 
-        ui_transform t = data->transform;
+    // if not does not apply
+    if (!data->apply_transform_at_measure) return;
+
+    ui_transform t = data->transform;
 
     // Helper to transform point
     #define TRANSFORM_X(x, y) (t.m00 * (x) + t.m01 * (y) + t.tx)
@@ -703,11 +704,11 @@ static void measure_dispatch(helper_measurement_walk_context* mc, const ui_node*
         mc->instance = old_instance;
     } return;
 
-    case ui_node_measure_transform: measure_transform(mc, node, idx, first_child_index); return;
-    case ui_node_padding: measure_padding(mc, node, idx, first_child_index); return;
-    case ui_node_sizebox: measure_sizebox(mc, node, idx, first_child_index); return;
-    case ui_node_row:     measure_row    (mc, node, idx, first_child_index); return;
-    case ui_node_column:  measure_column (mc, node, idx, first_child_index); return;
+    case ui_node_transform: measure_transform(mc, node, idx, first_child_index); return;
+    case ui_node_padding:   measure_padding(mc, node, idx, first_child_index); return;
+    case ui_node_sizebox:   measure_sizebox(mc, node, idx, first_child_index); return;
+    case ui_node_row:       measure_row    (mc, node, idx, first_child_index); return;
+    case ui_node_column:    measure_column (mc, node, idx, first_child_index); return;
     }
 
     measure_span_on_children(mc, node, idx, first_child_index);
@@ -1111,9 +1112,9 @@ static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* no
     } return;
 
     // transform matrix, then continue
-    case ui_node_render_transform: 
-    case ui_node_measure_transform: {
-        const ui_render_transform_data* data = helper_get_data(node, rc->instance);
+    case ui_node_transform: {
+        const ui_transform_data* data = helper_get_data(node, rc->instance);
+        if (!data->apply_transform_at_render) break;
         trs.trans = ui_mul(trs.trans, data->transform);
     } break;
 
