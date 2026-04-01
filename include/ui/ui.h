@@ -184,6 +184,11 @@ typedef struct ui_column_data {
 // ===========================
 // Api
 
+typedef enum ui_return_info {
+    ui_return_ok,
+    ui_return_arena_too_small
+} ui_return_info;
+
 typedef struct ui_tree_info {
     const ui_node*  root;
 
@@ -196,9 +201,8 @@ typedef struct ui_tree_info {
     void*           user_context;
 } ui_tree_info;
 
-size_t ui_subtree(const ui_node* node);
-void   ui_measure(ui_tree_info* ti);
-void   ui_render (ui_tree_info* ti);
+ui_return_info ui_measure(ui_tree_info* ti);
+ui_return_info ui_render (ui_tree_info* ti);
 
 // ===========================
 // Transformations Implemenations
@@ -415,50 +419,6 @@ static inline int helper_min(int a, int b) {
 // linear interpolation function
 static inline float helper_lerp(float a, float b, float t) {
     return a + t * (b - a);
-}
-
-// ===========================
-// Subtree
-
-typedef struct helper_subtree_walk_context {
-    const void* instance;
-} helper_subtree_walk_context;
-
-static size_t subtree_dispatch(helper_subtree_walk_context* sc, const ui_node* node) {
-    // instance case - change instance and recurse
-    if ((node->type & NODE_TYPE_NO_FLAG_MASK) == ui_node_instance) {
-        // load a child while still in previous instance
-        const ui_node* child = helper_get_node_single_child(node, sc->instance);
-
-        const void* old_instance = sc->instance;
-        sc->instance = helper_get_data(node, sc->instance);
-
-        size_t res = 1; 
-        if (child) res += subtree_dispatch(sc, child);
-
-        sc->instance = old_instance;
-        return res;
-    }
-
-    // recurse to single child
-    if (helper_is_single_childed(node->type)) {
-        const ui_node* child = helper_get_node_single_child(node, sc->instance);
-        if (child) return 1 + subtree_dispatch(sc, child);
-        return 1;
-    }
-
-    // recurse into array of childrens
-    const ui_node_array children = helper_get_node_children_array(node, sc->instance);
-    size_t res = 1;  for (size_t i = 0; i < children.count; i++) res += subtree_dispatch(sc,  &children.nodes[i]);
-    return res;
-}
-
-size_t ui_subtree(const ui_node* node) {
-    helper_subtree_walk_context sc = {
-        .instance = 0x0
-    };
-
-    return subtree_dispatch(&sc, node);
 }
 
 // ===========================
@@ -775,7 +735,7 @@ static void measure_dispatch(helper_measurement_walk_context* mc, const ui_node*
     measure_copy_child_or_fill(mc, node, idx, first_child_index);
 }
 
-void ui_measure(ui_tree_info* ti) {
+ui_return_info ui_measure(ui_tree_info* ti) {
     size_t* measurements_count = (size_t*)ti->temp_memory;
 
     helper_measurement_walk_context mc = {
@@ -785,11 +745,11 @@ void ui_measure(ui_tree_info* ti) {
         .measurements_capacity  = (ti->temp_capacity / sizeof(helper_measurement)),
     };
 
-    if (setjmp(mc.ui_measure_call_frame) == 0) {
-        measure_dispatch(&mc, ti->root, 0);
-    }
+    if (setjmp(mc.ui_measure_call_frame) == 0) measure_dispatch(&mc, ti->root, 0);
+    else return ui_return_arena_too_small;
 
     *measurements_count = mc.last_used_index + 1;
+    return ui_return_ok;
 }
 
 // ===========================
@@ -873,7 +833,7 @@ typedef struct helper_rendering_walk_context {
 // if it is not possilbe, longjmp to ui_render
 static inline char* helper_temp_mem_arena_alloc(helper_rendering_walk_context* rc, size_t bytes) {
     if (rc->temp_pos + bytes >= rc->temp_cap) longjmp(rc->ui_render_call_frame, 1);
-    char* result = rc->temp_mem; rc->temp_pos += bytes;
+    char* result = rc->temp_mem + rc->temp_pos; rc->temp_pos += bytes;
     return result;
 }
 
@@ -1291,8 +1251,8 @@ static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* no
     } break;
 
     case ui_node_padding: render_padding(rc, node, idx, first_child_index, trs); return;
-    case ui_node_row:     render_row(rc, node, idx, first_child_index, trs);     return;
-    case ui_node_column:  render_column(rc, node, idx, first_child_index, trs);  return;
+    case ui_node_row:     render_row    (rc, node, idx, first_child_index, trs);     return;
+    case ui_node_column:  render_column (rc, node, idx, first_child_index, trs);  return;
 
     // for primitves call injected methods
     case ui_node_box: {
@@ -1305,7 +1265,7 @@ static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* no
     render_pass_to_single_child(rc, node, idx, first_child_index, trs);
 }
 
-void ui_render(ui_tree_info* ti) {
+ui_return_info ui_render(ui_tree_info* ti) {
     helper_transform_pack trs = {
         .trans        = ui_default_trans,
         .pixel_width  = ti->resolution_x,
@@ -1325,9 +1285,10 @@ void ui_render(ui_tree_info* ti) {
         .user_context    = ti->user_context
     };
 
-    if (setjmp(rc.ui_render_call_frame) == 0) {
-        render_dispatch(&rc, ti->root, 0, trs);
-    }
+    if (setjmp(rc.ui_render_call_frame) == 0) render_dispatch(&rc, ti->root, 0, trs);
+    else return ui_return_arena_too_small;
+
+    return ui_return_ok;
 }
 
 #endif
