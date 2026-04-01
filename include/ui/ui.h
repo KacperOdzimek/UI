@@ -461,7 +461,7 @@ typedef struct helper_measurement_walk_context {
 static void measure_dispatch(helper_measurement_walk_context* mc, const ui_node* node, size_t idx);
 
 // See measure_copy_child_or_fill
-// Exposed for ui_node_transform dispatch
+// Exposed for ui_node_instance dispatch
 static inline void measure_copy_child_or_fill_given_child
 (helper_measurement_walk_context* mc, const ui_node* node, size_t idx, size_t cidx, const ui_node* child) {
     ui_measurement* own = &mc->measurements[idx];
@@ -575,9 +575,9 @@ static inline void measure_padding(helper_measurement_walk_context* mc, const ui
     measure_copy_child_or_fill(mc, node, idx, cidx);
 
     const ui_padding_data* data = helper_get_data(node, mc->instance);
-    ui_measurement* own  = &mc->measurements[idx];
+    ui_measurement* own = &mc->measurements[idx];
 
-    own->width.min  += data->left.min + data->right.min;
+    own->width.min += data->left.min + data->right.min;
     if (own->width.max != ui_inf_length) own->width.max  += data->left.max + data->right.max;
 
     own->height.min += data->top.min + data->bottom.min;
@@ -838,7 +838,7 @@ static void render_dispatch
 (helper_rendering_walk_context* rc, const ui_node* node, size_t idx, helper_transform_pack trs);
 
 // Read render_pass_to_single_child
-// This part is exposed for ui_node_transform
+// This part is exposed for ui_node_instance
 static inline void render_pass_to_single_child_given_child
 (helper_rendering_walk_context* rc, const ui_node* node, size_t idx, size_t cidx, helper_transform_pack trs, const ui_node* child) {
     if (!child) return;
@@ -974,22 +974,21 @@ static inline void render_row
         const ui_measurement* child_measurement = &rc->measurements[cidx + i];
 
         // find child dimension in pixels
-        int child_width = doflex
-            ? (child_measurement->width.max == ui_inf_length ? trs.pixel_width : child_measurement->width.max)
-            : child_measurement->width.min;
-
-        int child_height = helper_bound_length_in_parent(child_measurement->height, trs.pixel_height);
-
-        // take flex
-        if (doflex) {
+        int child_width;
+        if (doflex) {   // take flex
             int taken = left_width * (child_measurement->width.flex / flexsum);
             taken = helper_min(taken, child_measurement->width.max); // upper bound
-            taken = helper_max(taken, child_width);                  // lower bound
+            taken = helper_max(taken, child_measurement->width.min); // lower bound
             child_width = taken;
 
             left_width -= taken;
             flexsum    -= child_measurement->width.flex;
         }
+        else {  // or take minimum
+            child_width = child_measurement->width.min;
+        }
+
+        int child_height = helper_bound_length_in_parent(child_measurement->height, trs.pixel_height);
 
         // find child dimension on screen
         float screen_child_width  = 2 * (float)child_width  / trs.pixel_width;
@@ -1076,21 +1075,20 @@ static inline void render_column
         const ui_measurement* child_measurement = &rc->measurements[cidx + i];
 
         // find child dimension in pixels
-        int child_height = doflex
-            ? (child_measurement->height.max == ui_inf_length ? trs.pixel_height : child_measurement->height.max)
-            : child_measurement->height.min;
-
         int child_width = helper_bound_length_in_parent(child_measurement->width, trs.pixel_width);
 
-        // take flex
-        if (doflex) {
+        int child_height;
+        if (doflex) {   // take flex
             int taken = left_height * (child_measurement->height.flex / flexsum);
             taken = helper_min(taken, child_measurement->height.max); // upper bound
-            taken = helper_max(taken, child_height);                  // lower bound
+            taken = helper_max(taken, child_measurement->height.min); // lower bound
             child_height = taken;
 
             left_height -= taken;
             flexsum     -= child_measurement->height.flex;
+        }
+        else {  // or take minimum
+            child_height = child_measurement->height.min;
         }
 
         // find child dimension on screen
