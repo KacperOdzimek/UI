@@ -877,6 +877,11 @@ static inline char* helper_temp_mem_arena_alloc(helper_rendering_walk_context* r
     return result;
 }
 
+static inline void helper_temp_mem_arena_free(helper_rendering_walk_context* rc, char* to_position) {
+    size_t temp_pos = to_position - rc->temp_mem;
+    rc->temp_pos = temp_pos;
+}
+
 // Function dispatching rendering based on node type
 // - rc   - rendering walk context
 // - node - current context
@@ -981,13 +986,13 @@ static inline void render_row
     flexsum += data->spacing.flex;
 
     // allocate temporary memory
-    typedef struct row_slot {
+    typedef struct slot {
         char solved;
         int  width;
-    } row_slot;
+    } slot;
 
-    row_slot* slots = (row_slot*)helper_temp_mem_arena_alloc(rc, children.count * sizeof(row_slot));
-    for (size_t i = 0; i < children.count; i++) slots[i] = (row_slot){0, 0};
+    slot* slots = (slot*)helper_temp_mem_arena_alloc(rc, children.count * sizeof(slot));
+    for (size_t i = 0; i < children.count; i++) slots[i] = (slot){0, 0};
 
     // find number of spaces
     size_t spaces_count = children.count == 0 ? 0 : children.count - 1;
@@ -1002,7 +1007,7 @@ static inline void render_row
         float next_flexsum = 0.0f;
 
         // distribute to spacing if not maxed
-        if (spacing < data->spacing.max) {
+        if (spacing < data->spacing.max && spaces_count) {
             // assign left width proportional to flexsum
             int new_spacing = spacing + (data->spacing.flex / flexsum) * left_width;
             new_spacing /= spaces_count; // divide to get one space size
@@ -1030,20 +1035,27 @@ static inline void render_row
             // child measurements
             helper_measurement child_measurement = rc->measurements[cidx + i];
 
-            // previous width
+            // find width
             int child_width = slots[i].width;
+            int new_child_width; 
 
-            // assign left width proportional to flexsum
-            int new_child_width = child_width + (child_measurement.width.flex / flexsum) * left_width;
-            new_child_width = helper_min(new_child_width, child_measurement.width.max); // upper limit
-            new_child_width = helper_max(new_child_width, child_measurement.width.min); // lower limit
+            // flexing path
+            if (child_measurement.width.flex != 0) {
+                new_child_width = child_width + (child_measurement.width.flex / flexsum) * left_width;
+                new_child_width = helper_min(new_child_width, child_measurement.width.max); // upper limit
+                new_child_width = helper_max(new_child_width, child_measurement.width.min); // lower limit
+            }
+            // fixed path, take min by convention
+            else {
+                new_child_width = child_measurement.width.min;
+            }
 
             // remove space
             left_width -= (new_child_width - child_width);
             flexsum    -= child_measurement.width.flex;
             
-            // check if maxed
-            if (new_child_width >= child_measurement.width.max) {
+            // check if maxed / fixed and solved
+            if (new_child_width >= child_measurement.width.max || child_measurement.width.flex == 0.0f) {
                 unmaxed_slots--;
                 slots[i].solved = 1;
             }
@@ -1059,7 +1071,7 @@ static inline void render_row
 
         // prepare for next round
         flexsum = next_flexsum;
-    } while (left_width > 4 & unmaxed_slots);
+    } while (left_width > 4 && unmaxed_slots);
 
     // find spacing on screen dir
     float screen_spacing = 2.0f * ((float)(spacing) / trs.pixel_width);
@@ -1072,7 +1084,7 @@ static inline void render_row
     for (size_t i = 0; i < children.count; i++) {
         // find child dimension in pixels
         int child_width  = slots[i].width;
-        int child_height = helper_bound_length_in_parent(rc->measurements[i].height, trs.pixel_height);
+        int child_height = helper_bound_length_in_parent(rc->measurements[cidx + i].height, trs.pixel_height);
 
         // find child dimension on screen
         float screen_child_width  = 2 * (float)child_width  / trs.pixel_width;
@@ -1100,6 +1112,9 @@ static inline void render_row
         screen_cursor += screen_child_width;
         screen_cursor += screen_spacing;
     }
+
+    // free temporary memory
+    helper_temp_mem_arena_free(rc, (char*)slots);
 }
 
 // Layouts and renders children in a sequence
@@ -1108,88 +1123,128 @@ static inline void render_column
 (helper_rendering_walk_context* rc, const ui_node* node, size_t idx, size_t cidx, helper_transform_pack trs) {
     const ui_node_array   children    = helper_get_node_children_array(node, rc->instance);
     const ui_column_data* data        = helper_get_data(node, rc->instance);
-    helper_measurement        col_measure = rc->measurements[idx];
+    helper_measurement    own_measure = rc->measurements[idx];
 
     // find flexsum
     float flexsum = helper_children_flexsum_height(rc->measurements, children.count, children.nodes, cidx);
     flexsum += data->spacing.flex;
 
-    // rendering variables
-    float screen_cursor, screen_spacing;
-    int   left_height, doflex;
+    // allocate temporary memory
+    typedef struct slot {
+        char solved;
+        int  height;
+    } slot;
 
-    // content exceed parent, draw with minimal sizes
-    if (col_measure.height.min > trs.pixel_height || flexsum == 0.0f) {
-        // find cursor beginning
-        float cursor_interp_pixels = helper_lerp(0, (float)trs.pixel_width - col_measure.width.min, data->vertical_align);
-        screen_cursor  = (-1.0f) * (2.0f * (cursor_interp_pixels / trs.pixel_height) - 1.0f);
+    slot* slots = (slot*)helper_temp_mem_arena_alloc(rc, children.count * sizeof(slot));
+    for (size_t i = 0; i < children.count; i++) slots[i] = (slot){0, 0};
 
-        // init other values
-        screen_spacing = 2 * (float)data->spacing.min / trs.pixel_height;
-        left_height    = trs.pixel_height;
-        doflex         = 0;
-    }
-    // content does not exceed parent, extra space left
-    else {
-        screen_cursor = 1.0f; // start at top
-        left_height   = trs.pixel_height;
+    // find number of spaces
+    size_t spaces_count = children.count == 0 ? 0 : children.count - 1;
+    
+    // accumulative multipass space distribution
+    int    content_height = 0;
+    int    spacing        = 0;
+    int    left_height    = trs.pixel_height;
+    size_t unsolved_slots = children.count;
 
-        // find spacing
-        screen_spacing; {
-            size_t spaces_count = children.count == 0 ? 0 : children.count - 1;
+    do {
+        float next_flexsum = 0.0f;
 
-            int total_spacing = left_height * data->spacing.flex / flexsum; // all spacers
-            total_spacing = helper_min(total_spacing, 
-                data->spacing.max == ui_inf_length ? ui_inf_length : spaces_count * data->spacing.max
-            ); // upper bound
-            total_spacing = helper_max(total_spacing, spaces_count * data->spacing.min); // lower bound
+        // distribute to spacing if not maxed
+        if (spacing < data->spacing.max && spaces_count) {
+            // assign left height proportional to flexsum
+            int new_spacing = spacing + (data->spacing.flex / flexsum) * left_height;
+            new_spacing /= spaces_count; // divide to get one space size
 
-            left_height -= total_spacing;
+            new_spacing = helper_min(new_spacing, data->spacing.max); // upper limit
+            new_spacing = helper_max(new_spacing, data->spacing.min); // lower limit
+
+            // remove space
+            left_height -= (new_spacing - spacing) * spaces_count;
             flexsum     -= data->spacing.flex;
+
+            // if not maxed sign up for next partition
+            if (new_spacing >= data->spacing.max) next_flexsum += data->spacing.flex;
+
+            // save result
+            content_height += (new_spacing - spacing) * spaces_count;
+            spacing = new_spacing;
+        }
+
+        // top to bottom
+        for (size_t i = 0; i < children.count; i++) {
+            // already solved
+            if (slots[i].solved) continue;
+
+            // child measurements
+            helper_measurement child_measurement = rc->measurements[cidx + i];
+
+            // find height
+            int child_height = slots[i].height;
+            int new_child_height; 
+
+            // flexing path
+            if (child_measurement.height.flex != 0) {
+                new_child_height = child_height + (child_measurement.height.flex / flexsum) * left_height;
+                new_child_height = helper_min(new_child_height, child_measurement.height.max); // upper limit
+                new_child_height = helper_max(new_child_height, child_measurement.height.min); // lower limit
+            }
+            // fixed path, take min by convention
+            else {
+                new_child_height = child_measurement.height.min;
+            }
+
+            // remove space
+            left_height -= (new_child_height - child_height);
+            flexsum     -= child_measurement.height.flex;
             
-            if (spaces_count != 0) screen_spacing = 2 * (float)total_spacing / spaces_count / trs.pixel_height;
+            // check if maxed / fixed and solved
+            if (new_child_height >= child_measurement.height.max || child_measurement.height.flex == 0.0f) {
+                unsolved_slots--;
+                slots[i].solved = 1;
+            }
+            // if not, sign up for next distribution
+            else {
+                next_flexsum += child_measurement.height.flex;
+            }
+
+            // save result
+            content_height += (new_child_height - child_height);
+            slots[i].height = new_child_height;
         }
 
-        // enable flexing
-        doflex = 1;
-    }
+        // prepare for next round
+        flexsum = next_flexsum;
+    } while (left_height > 4 && unsolved_slots);
 
-    // render children
+    // find spacing on screen dir
+    float screen_spacing = 2.0f * ((float)(spacing) / trs.pixel_height);
+
+    // find cursor begining
+    float cursor_interp_pixels = helper_lerp(0, (float)trs.pixel_height - content_height, data->vertical_align);
+    float screen_cursor = 1.0f - 2.0f * (cursor_interp_pixels / trs.pixel_height);
+
+    // draw according to calculated heights
     for (size_t i = 0; i < children.count; i++) {
-        const helper_measurement* child_measurement = &rc->measurements[cidx + i];
-
         // find child dimension in pixels
-        int child_width = helper_bound_length_in_parent(child_measurement->width, trs.pixel_width);
-
-        int child_height;
-        if (doflex) {   // take flex
-            int taken = left_height * (child_measurement->height.flex / flexsum);
-            taken = helper_min(taken, child_measurement->height.max); // upper bound
-            taken = helper_max(taken, child_measurement->height.min); // lower bound
-            child_height = taken;
-
-            left_height -= taken;
-            flexsum     -= child_measurement->height.flex;
-        }
-        else {  // or take minimum
-            child_height = child_measurement->height.min;
-        }
+        int child_width  = helper_bound_length_in_parent(rc->measurements[cidx + i].width, trs.pixel_width);
+        int child_height = slots[i].height;
 
         // find child dimension on screen
         float screen_child_width  = 2 * (float)child_width  / trs.pixel_width;
         float screen_child_height = 2 * (float)child_height / trs.pixel_height;
 
-        // find horizontal alignment offset
+        // find horizontal aligment offset
         float screen_horizontal_offset = helper_lerp(
-            -1.0f + screen_child_width / 2.0f,  // left align
-             1.0f - screen_child_width / 2.0f,  // right align
+            -1.0f + screen_child_width / 2.0f, // left align
+            1.0f - screen_child_width / 2.0f,  // right align
             data->horizontal_align
         );
 
         // find child transformation
         helper_transform_pack child_trs = trs;
-        child_trs.trans = ui_off(child_trs.trans,
-            screen_horizontal_offset,
+        child_trs.trans = ui_off(child_trs.trans, 
+            screen_horizontal_offset, 
             screen_cursor - screen_child_height / 2.0f
         );
         child_trs = helper_scale_pack_to_dim(child_trs, child_width, child_height);
@@ -1197,10 +1252,13 @@ static inline void render_column
         // render child
         render_dispatch(rc, &children.nodes[i], cidx + i, child_trs);
 
-        // move cursor (downward)
+        // move cursor
         screen_cursor -= screen_child_height;
         screen_cursor -= screen_spacing;
     }
+
+    // free temporary memory
+    helper_temp_mem_arena_free(rc, (char*)slots);
 }
 
 static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* node, size_t idx, helper_transform_pack trs) {
