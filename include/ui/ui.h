@@ -106,7 +106,7 @@ typedef struct ui_node ui_node;
 typedef struct ui_node_array ui_node_array;
 
 typedef struct ui_node {
-    ui_node_type type;
+    ui_node_type                type;
 
     union {
         const ui_node*          child;
@@ -115,8 +115,8 @@ typedef struct ui_node {
     };
 
     union {
-        const void*     data;
-        size_t          data_instance_offset;
+        const void*             data;
+        size_t                  data_instance_offset;
     };
 } ui_node;
 
@@ -184,16 +184,15 @@ typedef struct ui_column_data {
 // ===========================
 // Api
 
-typedef struct ui_measurement {
-    ui_length width;
-    ui_length height;
-} ui_measurement;
-
 typedef struct ui_tree_info {
     const ui_node*  root;
-    ui_measurement* measurements;
+
     int             resolution_x;
     int             resolution_y;
+
+    char*           temp_memory;
+    size_t          temp_capacity;
+
     void*           user_context;
 } ui_tree_info;
 
@@ -334,7 +333,7 @@ static inline ui_transform ui_mul(ui_transform p, ui_transform c) {
 /*
     Important implementation notes!
 
-    1) In both measure and render passes the tree is walked IN THE SAME ORDER
+    1. In both measure and render passes the tree is walked IN THE SAME ORDER
     This is to assure consistient indexation of children nodes
 
     Rules:
@@ -352,11 +351,23 @@ static inline ui_transform ui_mul(ui_transform p, ui_transform c) {
 
     The last used index is saved inside walk context
 
-    2) On adding new node check:
+    2. On adding new node check:
     - Node info helpers
     - Measure dispatch
     - Render dispatch
+
+    3. Temp memory
+    - Temp memory is memory given by client to ui system for it's own needs
+    - In measurements pass, a block of this memory is allocated for measurements info
+    - In render pass, rest of memory is allocated like an arena, by functions that require
+        extra memory like render_row, render_column and so
+    - If temp memory renders to small, we perform longjmp out of recursion
 */
+
+// ===========================
+// Includes
+
+#include <setjmp.h>
 
 // ===========================
 // Node helpers
@@ -386,6 +397,19 @@ static inline const ui_node* helper_get_node_single_child(const ui_node* node, c
 static inline const ui_node_array helper_get_node_children_array(const ui_node* node, const char* instance) {
     if (!(node->type & ui_node_child_instanced)) return *node->child_array;
     return **(const ui_node_array**)(instance + node->child_instance_offset);
+}
+
+// ===========================
+// Maths helpers
+
+// max(a, b)
+static inline int helper_max(int a, int b) {
+    return a > b ? a : b;
+}
+
+// min(a, b)
+static inline int helper_min(int a, int b) {
+    return a < b ? a : b;
 }
 
 // ===========================
@@ -435,20 +459,18 @@ size_t ui_subtree(const ui_node* node) {
 // ===========================
 // Measuring
 
-// max(a, b)
-static inline int helper_max(int a, int b) {
-    return a > b ? a : b;
-}
-
-// min(a, b)
-static inline int helper_min(int a, int b) {
-    return a < b ? a : b;
-}
+typedef struct helper_measurement {
+    ui_length width;
+    ui_length height;
+} helper_measurement;
 
 typedef struct helper_measurement_walk_context {
-    const void*     instance;
-    size_t          last_used_index;    // see implementation note
-    ui_measurement* measurements;       // write target
+    jmp_buf             ui_measure_call_frame;  // ui_measure call jmp buf, in case temp memory proves to small
+    const void*         instance;               // current subtree instance
+    size_t              last_used_index;        // see implementation note, also equal to count of measurements made, 
+                                                // used to keep track measurements array fill
+    helper_measurement* measurements;           // measurements write target
+    size_t              measurements_capacity;  // measurements capacity limit
 } helper_measurement_walk_context;
 
 // Function dispatching measuring based on node type
@@ -464,7 +486,7 @@ static void measure_dispatch(helper_measurement_walk_context* mc, const ui_node*
 // Exposed for ui_node_instance dispatch
 static inline void measure_copy_child_or_fill_given_child
 (helper_measurement_walk_context* mc, const ui_node* node, size_t idx, size_t cidx, const ui_node* child) {
-    ui_measurement* own = &mc->measurements[idx];
+    helper_measurement* own = &mc->measurements[idx];
 
     if (child) {
         measure_dispatch(mc, child, cidx);
@@ -472,7 +494,7 @@ static inline void measure_copy_child_or_fill_given_child
         return;
     }
 
-    *own = (ui_measurement){
+    *own = (helper_measurement){
         .width  = {0, ui_inf_length, 1.0f},
         .height = {0, ui_inf_length, 1.0f}
     };
@@ -494,7 +516,7 @@ static inline void measure_transform(helper_measurement_walk_context* mc, const 
     measure_copy_child_or_fill(mc, node, idx, cidx);
 
     const ui_transform_data* data = helper_get_data(node, mc->instance);
-    ui_measurement* own = &mc->measurements[idx];
+    helper_measurement* own = &mc->measurements[idx];
 
     // if not does not apply
     if (!data->apply_transform_at_measure) return;
@@ -575,7 +597,7 @@ static inline void measure_padding(helper_measurement_walk_context* mc, const ui
     measure_copy_child_or_fill(mc, node, idx, cidx);
 
     const ui_padding_data* data = helper_get_data(node, mc->instance);
-    ui_measurement* own = &mc->measurements[idx];
+    helper_measurement* own = &mc->measurements[idx];
 
     own->width.min += data->left.min + data->right.min;
     if (own->width.max != ui_inf_length) own->width.max  += data->left.max + data->right.max;
@@ -594,7 +616,7 @@ static inline void measure_sizebox(helper_measurement_walk_context* mc, const ui
     measure_copy_child_or_fill(mc, node, idx, cidx);
 
     const ui_sizebox_data* data = helper_get_data(node, mc->instance);
-    ui_measurement*        own  = &mc->measurements[idx];
+    helper_measurement*        own  = &mc->measurements[idx];
 
     if (data->flag & ui_sizebox_overwrite_width_min)   own->width.min   = data->width.min;
     if (data->flag & ui_sizebox_overwrite_width_max)   own->width.max   = data->width.max;
@@ -620,14 +642,14 @@ static inline void measure_row(helper_measurement_walk_context* mc, const ui_nod
     const ui_node_array children = helper_get_node_children_array(node, mc->instance);
     const ui_row_data*  data     = helper_get_data(node, mc->instance);
 
-    ui_measurement own = {
+    helper_measurement own = {
         .width  = {0, 0, 0.0f},
         .height = {0, 0, 0.0f}
     };
 
     for (size_t i = 0; i < children.count; i++) {
         measure_dispatch(mc, &children.nodes[i], cidx + i);
-        const ui_measurement* result = &mc->measurements[cidx + i];
+        const helper_measurement* result = &mc->measurements[cidx + i];
 
         own.width.min += result->width.min;
 
@@ -674,14 +696,14 @@ static inline void measure_column(helper_measurement_walk_context* mc, const ui_
     const ui_node_array   children = helper_get_node_children_array(node, mc->instance);
     const ui_column_data* data     = helper_get_data(node, mc->instance);
 
-    ui_measurement own = {
+    helper_measurement own = {
         .width  = {0, 0, 0.0f},
         .height = {0, 0, 0.0f}
     };
 
     for (size_t i = 0; i < children.count; i++) {
         measure_dispatch(mc, &children.nodes[i], cidx + i);
-        const ui_measurement* result = &mc->measurements[cidx + i];
+        const helper_measurement* result = &mc->measurements[cidx + i];
 
         own.height.min += result->height.min;
 
@@ -720,6 +742,11 @@ static void measure_dispatch(helper_measurement_walk_context* mc, const ui_node*
     } 
     else mc->last_used_index += helper_get_node_children_array(node, mc->instance).count;
 
+    // check memory overflow
+    if (mc->last_used_index >= mc->measurements_capacity) {
+        longjmp(mc->ui_measure_call_frame, 1);
+    }
+
     // dispatch
     switch (node->type & NODE_TYPE_NO_FLAG_MASK) {
     case ui_node_instance: {
@@ -739,17 +766,25 @@ static void measure_dispatch(helper_measurement_walk_context* mc, const ui_node*
     case ui_node_column:    measure_column (mc, node, idx, first_child_index); return;
     }
 
+    // default dispatch case
     measure_copy_child_or_fill(mc, node, idx, first_child_index);
 }
 
 void ui_measure(ui_tree_info* ti) {
+    size_t* measurements_count = (size_t*)ti->temp_memory;
+
     helper_measurement_walk_context mc = {
-        .instance        = 0x0,
-        .last_used_index = 0,
-        .measurements    = ti->measurements
+        .instance               = 0x0,
+        .last_used_index        = 0,
+        .measurements           = (helper_measurement*)(ti->temp_memory + sizeof(size_t)),
+        .measurements_capacity  = (ti->temp_capacity / sizeof(helper_measurement)),
     };
 
-    measure_dispatch(&mc, ti->root, 0);
+    if (setjmp(mc.ui_measure_call_frame) == 0) {
+        measure_dispatch(&mc, ti->root, 0);
+    }
+
+    *measurements_count = mc.last_used_index + 1;
 }
 
 // ===========================
@@ -805,7 +840,7 @@ static inline int helper_bound_length_in_parent(ui_length length, int parent_axi
 
 // Returns sum of width flexes of given node's children
 static inline float helper_children_flexsum_width
-(const ui_measurement* measurements, size_t child_count, const ui_node* children, size_t cidx) {
+(const helper_measurement* measurements, size_t child_count, const ui_node* children, size_t cidx) {
     float flexsum = 0.0f;
     for (size_t i = 0; i < child_count; i++) flexsum += measurements[cidx + i].width.flex;
     return flexsum;
@@ -813,17 +848,24 @@ static inline float helper_children_flexsum_width
 
 // Returns sum of height flexes of given node's children
 static inline float helper_children_flexsum_height
-(const ui_measurement* measurements, size_t child_count, const ui_node* children, size_t cidx) {
+(const helper_measurement* measurements, size_t child_count, const ui_node* children, size_t cidx) {
     float flexsum = 0.0f;
     for (size_t i = 0; i < child_count; i++) flexsum += measurements[cidx + i].height.flex;
     return flexsum;
 }
 
 typedef struct helper_rendering_walk_context {
-    const void*           instance;
-    size_t                last_used_index;    // see implementation note
-    const ui_measurement* measurements;       // read target
-    void*                 user_context;
+    jmp_buf                     ui_render_call_frame;   // ui_render call jmp buf, in case temp memory proves to small
+
+    const void*                 instance;
+
+    size_t                      last_used_index;        // see implementation note
+    const helper_measurement*   measurements;           // read target
+
+    size_t                      temp_pos;
+    char*                       temp_mem;
+
+    void*                       user_context;
 } helper_rendering_walk_context;
 
 // Function dispatching rendering based on node type
@@ -843,8 +885,8 @@ static inline void render_pass_to_single_child_given_child
 (helper_rendering_walk_context* rc, const ui_node* node, size_t idx, size_t cidx, helper_transform_pack trs, const ui_node* child) {
     if (!child) return;
 
-    ui_measurement own_measure   = rc->measurements[idx];
-    ui_measurement child_measure = rc->measurements[cidx];
+    helper_measurement own_measure   = rc->measurements[idx];
+    helper_measurement child_measure = rc->measurements[cidx];
 
     int own_width  = helper_bound_length_in_parent(own_measure.width,  trs.pixel_width);
     int own_height = helper_bound_length_in_parent(own_measure.height, trs.pixel_height);
@@ -878,7 +920,7 @@ static inline void render_padding
     const ui_padding_data* data  = helper_get_data(node, rc->instance);
     if (!child) return;
     
-    const ui_measurement* child_measurement = &rc->measurements[cidx];
+    const helper_measurement* child_measurement = &rc->measurements[cidx];
 
     // find maximum free sizes
     int child_width  = child_measurement->width.min;
@@ -923,7 +965,7 @@ static inline void render_row
 (helper_rendering_walk_context* rc, const ui_node* node, size_t idx, size_t cidx, helper_transform_pack trs) {
     const ui_node_array children    = helper_get_node_children_array(node, rc->instance);
     const ui_row_data*  data        = helper_get_data(node, rc->instance);
-    ui_measurement      row_measure = rc->measurements[idx];
+    helper_measurement      row_measure = rc->measurements[idx];
 
     // find flexsum
     float flexsum = helper_children_flexsum_width(rc->measurements, children.count, children.nodes, cidx);
@@ -971,7 +1013,7 @@ static inline void render_row
 
     // render children
     for (size_t i = 0; i < children.count; i++) {
-        const ui_measurement* child_measurement = &rc->measurements[cidx + i];
+        const helper_measurement* child_measurement = &rc->measurements[cidx + i];
 
         // find child dimension in pixels
         int child_width;
@@ -1024,7 +1066,7 @@ static inline void render_column
 (helper_rendering_walk_context* rc, const ui_node* node, size_t idx, size_t cidx, helper_transform_pack trs) {
     const ui_node_array   children    = helper_get_node_children_array(node, rc->instance);
     const ui_column_data* data        = helper_get_data(node, rc->instance);
-    ui_measurement        col_measure = rc->measurements[idx];
+    helper_measurement        col_measure = rc->measurements[idx];
 
     // find flexsum
     float flexsum = helper_children_flexsum_height(rc->measurements, children.count, children.nodes, cidx);
@@ -1072,7 +1114,7 @@ static inline void render_column
 
     // render children
     for (size_t i = 0; i < children.count; i++) {
-        const ui_measurement* child_measurement = &rc->measurements[cidx + i];
+        const helper_measurement* child_measurement = &rc->measurements[cidx + i];
 
         // find child dimension in pixels
         int child_width = helper_bound_length_in_parent(child_measurement->width, trs.pixel_width);
@@ -1170,12 +1212,21 @@ void ui_render(ui_tree_info* ti) {
         .pixel_height = ti->resolution_y
     };
 
+    size_t measurements_made = *(size_t*)(ti->temp_memory) + 1;
+    size_t temp_pos = sizeof(size_t) + measurements_made * sizeof(helper_measurement);
+
     helper_rendering_walk_context rc = {
+        .instance        = 0x0,
         .last_used_index = 0,
-        .measurements    = ti->measurements
+        .temp_pos        = temp_pos,
+        .temp_mem        = ti->temp_memory,
+        .measurements    = (helper_measurement*)(ti->temp_memory + sizeof(size_t)),
+        .user_context    = ti->user_context
     };
 
-    render_dispatch(&rc, ti->root, 0, trs);
+    if (setjmp(rc.ui_render_call_frame) == 0) {
+        render_dispatch(&rc, ti->root, 0, trs);
+    }
 }
 
 #endif
