@@ -1,8 +1,14 @@
 /*
-    Implementation Injections
+    Injections
 */
 
+#ifndef UI_H
+    typedef struct ui_injection_texture ui_injection_texture;
+    typedef struct ui_injection_font    ui_injection_font;
+#endif
+
 #ifdef UI_IMPL
+    
     typedef struct ui_transform ui_transform;
 
     static inline void ui_injection_render_box(
@@ -78,6 +84,22 @@ static inline ui_transform ui_rot(ui_transform m, float deg_cw);
 // UI_TRANS <- compile time ui_trans transform builder macro (definied later in the file)
 
 // ===========================
+// Colors
+
+// basic 32 bit color
+typedef struct ui_color {
+    unsigned char r, g, b, a;
+} ui_color;
+
+// runtime hex to ui_color conversion
+// letters case does not matter, '#' prefix is required
+// if hex[6] is not '\0', then alpha channel is read, else it is set to FF
+// UI_HEX <- compile time alternative
+static inline ui_color ui_hex(const char* hex);
+
+// UI_HEX <- compile time ui_hex alternative (definied later in the file)
+
+// ===========================
 // Node Typedef
 
 // common
@@ -130,6 +152,16 @@ typedef enum ui_node_type {
     // a box render primitive
     // single childed
     ui_node_box,
+
+    // node image
+    // image render primitive
+    // renders given texture all over it's span
+    ui_node_image,
+
+    // node image
+    // image render primitive
+    // renders given texture with it's desired resolution
+    ui_node_photo,
 
     // Extra Flags
 
@@ -230,6 +262,32 @@ typedef struct ui_column_data {
     ui_length spacing;          // spacing between childrens
 } ui_column_data;
 
+// box
+
+typedef struct ui_box_data {
+    ui_color color;
+} ui_box_data;
+
+// image
+
+typedef struct ui_image_data {
+    const ui_injection_texture* image;   // the image pointer
+    ui_color                    tint;    // image color modyficator
+} ui_image_data;
+
+// photo
+
+typedef struct ui_photo_data {
+    const ui_injection_texture* image;
+    ui_color                    tint;    // image color modyficator
+} ui_photo_data;
+
+// text
+ 
+typedef struct ui_text_data {
+
+} ui_text_data;
+
 // ===========================
 // Api
 
@@ -269,7 +327,38 @@ ui_return_flag ui_measure(ui_args* a);
 ui_return_flag ui_render (ui_args* a);
 
 // ===========================
-// Transformations Implemenations
+// Hex to Ui Color Implementations
+
+// convert single hex char to value at compile time
+#define UI_HEX_VAL(c) ( ((c) >= '0' && (c) <= '9') ? ((c)-'0') :    \
+                        ((c) >= 'a' && (c) <= 'f') ? ((c)-'a'+10) : \
+                        ((c) >= 'A' && (c) <= 'F') ? ((c)-'A'+10) : 0 )
+
+// convert two hex chars to byte at compile time
+#define UI_HEX_BYTE(c1, c2) ((UI_HEX_VAL(c1) << 4) | UI_HEX_VAL(c2))
+
+static inline ui_color ui_hex(const char* hex) {
+    ui_color result;
+    result.r = UI_HEX_BYTE(hex[1], hex[2]);
+    result.g = UI_HEX_BYTE(hex[3], hex[4]);
+    result.b = UI_HEX_BYTE(hex[5], hex[6]);
+
+    // if 8 digits after #, read alpha
+    if (hex[7] != '\0' && hex[8] != '\0') result.a = UI_HEX_BYTE(hex[7], hex[8]);
+    else result.a = 0xFF;
+
+    return result;
+}
+
+#define UI_HEX(s) (ui_color){ \
+    UI_HEX_BYTE(s[1], s[2]), \
+    UI_HEX_BYTE(s[3], s[4]), \
+    UI_HEX_BYTE(s[5], s[6]), \
+    (sizeof(s) > 8 ? UI_HEX_BYTE(s[7], s[8]) : 0xFF) \
+}
+
+// ===========================
+// Transformations Implementations
 
 static inline ui_transform ui_trans(float dx, float dy, float sx, float sy, float deg_cw) {
     float rad = deg_cw * (3.14159265358979323846f / 180.0f);
