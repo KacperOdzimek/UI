@@ -8,12 +8,18 @@
 #endif
 
 #ifdef UI_IMPL  
-    typedef struct ui_transform ui_transform;
-    typedef struct ui_box_data  ui_box_data;
+    typedef struct ui_transform  ui_transform;
+    typedef struct ui_box_data   ui_box_data;
+    typedef struct ui_image_data ui_image_data;
 
     static inline void ui_injection_render_box(
         ui_transform transform, int pixels_width, int pixels_height, 
-        const ui_box_data* box_data, void* user_context
+        const ui_box_data* data, void* user_context
+    );
+
+    static inline void ui_injection_render_image(
+        ui_transform transform, int pixels_width, int pixels_height, 
+        const ui_image_data* data, void* user_context
     );
 #endif
 
@@ -155,13 +161,17 @@ typedef enum ui_node_type {
 
     // node image
     // image render primitive
-    // renders given texture all over it's span
+    // renders given texture in it's desired size
+    // data - ui_image_data
+    // single childed
     ui_node_image,
 
-    // node image
-    // image render primitive
-    // renders given texture with it's desired resolution
-    ui_node_photo,
+    // node fill image
+    // other image render primitive
+    // renders given texture all over given span
+    // data - ui_image_data
+    // single childed
+    ui_node_fill_image,
 
     // Extra Flags
 
@@ -274,13 +284,6 @@ typedef struct ui_image_data {
     const ui_injection_texture* image;   // the image pointer
     ui_color                    tint;    // image color modyficator
 } ui_image_data;
-
-// photo
-
-typedef struct ui_photo_data {
-    const ui_injection_texture* image;
-    ui_color                    tint;    // image color modyficator
-} ui_photo_data;
 
 // text
  
