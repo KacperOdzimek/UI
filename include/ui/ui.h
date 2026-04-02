@@ -147,16 +147,16 @@ typedef struct ui_padding_data {
 typedef enum ui_sizebox_overwrite_flag {
     ui_sizebox_overwrite_none        = 0,
     ui_sizebox_overwrite_all         = 255,
-    ui_sizebox_overwrite_all_width   = 15,
-    ui_sizebox_overwrite_all_height  = 240,
+    ui_sizebox_overwrite_all_width   = 7,
+    ui_sizebox_overwrite_all_height  = 56,
 
-    ui_sizebox_overwrite_width_min   = 1 << 1,
-    ui_sizebox_overwrite_width_max   = 1 << 2,
-    ui_sizebox_overwrite_width_flex  = 1 << 3,
+    ui_sizebox_overwrite_width_min   = 1 << 0,
+    ui_sizebox_overwrite_width_max   = 1 << 1,
+    ui_sizebox_overwrite_width_flex  = 1 << 2,
 
-    ui_sizebox_overwrite_height_min  = 1 << 5,
-    ui_sizebox_overwrite_height_max  = 1 << 6,
-    ui_sizebox_overwrite_height_flex = 1 << 7
+    ui_sizebox_overwrite_height_min  = 1 << 3,
+    ui_sizebox_overwrite_height_max  = 1 << 4,
+    ui_sizebox_overwrite_height_flex = 1 << 5
 } ui_sizebox_overwrite_flag;
 
 typedef struct ui_sizebox_data {
@@ -186,7 +186,7 @@ typedef struct ui_column_data {
 
 typedef enum ui_return_info {
     ui_return_ok,
-    ui_return_arena_too_small
+    ui_retrun_temp_to_small
 } ui_return_info;
 
 typedef struct ui_tree_info {
@@ -746,7 +746,7 @@ ui_return_info ui_measure(ui_tree_info* ti) {
     };
 
     if (setjmp(mc.ui_measure_call_frame) == 0) measure_dispatch(&mc, ti->root, 0);
-    else return ui_return_arena_too_small;
+    else return ui_retrun_temp_to_small;
 
     *measurements_count = mc.last_used_index + 1;
     return ui_return_ok;
@@ -1286,7 +1286,7 @@ ui_return_info ui_render(ui_tree_info* ti) {
     };
 
     if (setjmp(rc.ui_render_call_frame) == 0) render_dispatch(&rc, ti->root, 0, trs);
-    else return ui_return_arena_too_small;
+    else return ui_retrun_temp_to_small;
 
     return ui_return_ok;
 }
