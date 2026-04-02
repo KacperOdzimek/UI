@@ -880,17 +880,13 @@ static inline float helper_children_flexsum_height
 
 typedef struct helper_rendering_walk_context {
     jmp_buf                     ui_render_call_frame;   // ui_render call jmp buf, in case temp memory proves to small
-
-    const void*                 instance;
-
+    const void*                 instance;               // current subtree instance
     size_t                      last_used_index;        // see implementation note
-    const helper_measurement*   measurements;           // read target
-
-    size_t                      temp_cap;
-    size_t                      temp_pos;
-    char*                       temp_mem;
-
-    void*                       user_context;
+    const helper_measurement*   measurements;           // measurements read target
+    size_t                      temp_cap;               // temporary memory capacity
+    size_t                      temp_pos;               // temporary memory arena allocation position
+    char*                       temp_mem;               // temporary memory pointer
+    void*                       user_context;           // user context to be passed to injected functions
 } helper_rendering_walk_context;
 
 // Allocates first free given amount of bytes in temp memory
