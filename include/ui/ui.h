@@ -24,9 +24,18 @@
 // ===========================
 // Layout Length
 
-const static int ui_inf_length = 0x7FFFFFFF;
+// variable representing infinte length
+// not set to int max, to avoid overflows in implementation
+// needs to be increased if you are rendering on a (128+)K screen
+const static int ui_inf_length = 128 * 1000;
 
 // structure representing 1d length
+// min  - minimal size element can be rendered with
+// max  - maximal size element can be rendered with
+// flex - relative grow speed, compared to other elements inside an container (row/column)
+// each length object is expected to met:
+// min  <= max
+// flex >= 0
 typedef struct ui_length {
     int   min;  // minimum dimension
     int   max;  // maximum dimension
@@ -37,12 +46,13 @@ typedef struct ui_length {
 // Render Transforms
 
 // structure representing ui elements tranformations (matrix 2x3)
+// can be modified with functions declared below in the header
 typedef struct ui_transform {
     float m00, m01, tx;
     float m10, m11, ty;
 } ui_transform;
 
-// Default ui element transform
+// Default ui element transform (identity matrix)
 // offset: (0, 0), scale: (1, 1), rotation: (0)
 static const ui_transform ui_default_trans = {
     1, 0, 0,
@@ -65,7 +75,7 @@ static inline ui_transform ui_sca(ui_transform m, float sx, float sy);
 // rotate transform by degrees clockwise
 static inline ui_transform ui_rot(ui_transform m, float deg_cw);
 
-// UI_TRANS <- compile time ui_trans transform builder macro (define later in the file)
+// UI_TRANS <- compile time ui_trans transform builder macro (definied later in the file)
 
 // ===========================
 // Node Typedef
@@ -75,36 +85,77 @@ static inline ui_transform ui_rot(ui_transform m, float deg_cw);
 typedef enum ui_node_type {
     // Architectural
 
-    ui_node_instance, // sets instance pointer to value of data
+    // instance node
+    // sets instance pointer to value of own data
+    // this pointer will be then carried into the subtree during
+    // measure/render travelsals, affecting data reads from child nodes
+    // according to their active flags
+    // single childed
+    ui_node_instance,
 
     // Transform
 
-    ui_node_transform,  // transforms children
+    // transform node
+    // transforms child nodes measure/render by an matrix
+    // single childed
+    ui_node_transform,
 
     // Basic Layout
 
-    ui_node_blank,
-    ui_node_padding, // padds children by given amount of pixels
-    ui_node_sizebox, // pushes size constraint
+    // node padding
+    // padds children by given length
+    // single childed
+    ui_node_padding, 
+
+    // node sizebox
+    // during measure alters measurements according to own data
+    // single childed
+    ui_node_sizebox,
 
     // Containers
 
-    ui_node_row,     // row component 
-    ui_node_column,  // column component
+    // node row
+    // renders children in a horizontal sequence
+    // multiple children (array)
+    ui_node_row,
+
+    // node column
+    // renders children in a vertical sequence
+    // multiple children (array)
+    ui_node_column,
 
     // Primitives
 
-    ui_node_box,     // box draw render primitive
+    // node box
+    // a box render primitive
+    // single childed
+    ui_node_box,
 
     // Extra Flags
 
-    ui_node_data_instanced  = 1 << 6,
-    ui_node_child_instanced = 1 << 7
+    // see ui_node_instance
+    // if active, during measure and render travelsals
+    // instead of reading node->data, parsing functions will read
+    // (*(node_data_type*)(instance + node->data_instance_offset))
+    ui_node_flag_data_instanced  = 1 << 6,
+
+    // see ui_node_instance
+    // if active, during measure and render travelsals
+    // instead of reading node->data, parsing functions will read
+    // (*(const ui_node*/ui_node_array*)(instance + node->child_instance_offset))
+    ui_node_flag_child_instanced = 1 << 7
 } ui_node_type;
 
 typedef struct ui_node ui_node;
 typedef struct ui_node_array ui_node_array;
 
+// structure representing ui node - basic ui building block
+// type         - specify ui node type, which determines how node will be read
+// data         - type specific data struct, declared below in the header
+// child        - if node is single childed, this is this node child (may be 0x0 if no child)
+// child_array  - if node is multi childed, this is pointer to children array (may not be 0x0, but array may be of size 0)
+// if ui_node_flag_data_instanced or ui_node_flag_child_instanced are added to node type
+// data/child/child_array reads are altered as described in comments above those flags
 typedef struct ui_node {
     ui_node_type                type;
 
@@ -120,6 +171,7 @@ typedef struct ui_node {
     };
 } ui_node;
 
+// structure representing an array of ui nodes
 typedef struct ui_node_array {
     size_t   count;
     ui_node* nodes;
@@ -131,9 +183,6 @@ typedef struct ui_transform_data {
     unsigned char   apply_transform_at_measure : 1;
     unsigned char   apply_transform_at_render  : 1;
     ui_transform    transform;
-
-    unsigned char   set_depth_not_add  : 1;
-    int             new_depth;
 } ui_transform_data;
 
 // padding
@@ -147,16 +196,16 @@ typedef struct ui_padding_data {
 typedef enum ui_sizebox_overwrite_flag {
     ui_sizebox_overwrite_none        = 0,
     ui_sizebox_overwrite_all         = 255,
-    ui_sizebox_overwrite_all_width   = 15,
-    ui_sizebox_overwrite_all_height  = 240,
+    ui_sizebox_overwrite_all_width   = 7,
+    ui_sizebox_overwrite_all_height  = 56,
 
-    ui_sizebox_overwrite_width_min   = 1 << 1,
-    ui_sizebox_overwrite_width_max   = 1 << 2,
-    ui_sizebox_overwrite_width_flex  = 1 << 3,
+    ui_sizebox_overwrite_width_min   = 1 << 0,
+    ui_sizebox_overwrite_width_max   = 1 << 1,
+    ui_sizebox_overwrite_width_flex  = 1 << 2,
 
-    ui_sizebox_overwrite_height_min  = 1 << 5,
-    ui_sizebox_overwrite_height_max  = 1 << 6,
-    ui_sizebox_overwrite_height_flex = 1 << 7
+    ui_sizebox_overwrite_height_min  = 1 << 3,
+    ui_sizebox_overwrite_height_max  = 1 << 4,
+    ui_sizebox_overwrite_height_flex = 1 << 5
 } ui_sizebox_overwrite_flag;
 
 typedef struct ui_sizebox_data {
@@ -184,25 +233,40 @@ typedef struct ui_column_data {
 // ===========================
 // Api
 
-typedef enum ui_return_info {
+// ui functions return flag
+// flags are self explanatory
+typedef enum ui_return_flag {
     ui_return_ok,
-    ui_return_arena_too_small
-} ui_return_info;
+    ui_retrun_temp_to_small
+} ui_return_flag;
 
-typedef struct ui_tree_info {
-    const ui_node*  root;
+// ui functions arguments
+typedef struct ui_args {
+    const ui_node* root;    // the node to begin measurement/rendering process in
 
-    int             resolution_x;
-    int             resolution_y;
+    int     resolution_x;   // screen resolution width
+    int     resolution_y;   // screen resolution height
 
-    char*           temp_memory;
-    size_t          temp_capacity;
+    char*   temp_memory;    // temporary memory for processes to use
+                            // carries results of measurement process to rendering
+                            // client is expected to alloc around 32 bytes per ui node
+                            // given to little memory does not cause memory errors - 
+                            // process will simply return error flag
+                            // upon so realloc and try again!
+                            
+    size_t  temp_capacity;  // temporary memory capacity
 
-    void*           user_context;
-} ui_tree_info;
+    void*   user_context;   // user context
+                            // will be passed to injected functions
+} ui_args;
 
-ui_return_info ui_measure(ui_tree_info* ti);
-ui_return_info ui_render (ui_tree_info* ti);
+// first step in rendering ui
+// computes desired resolution of each node
+ui_return_flag ui_measure(ui_args* a);
+
+// second step in rendering ui
+// renders the ui according to their desired resolutions
+ui_return_flag ui_render (ui_args* a);
 
 // ===========================
 // Transformations Implemenations
@@ -376,7 +440,7 @@ static inline ui_transform ui_mul(ui_transform p, ui_transform c) {
 // ===========================
 // Node helpers
 
-static const unsigned char NODE_TYPE_NO_FLAG_MASK = (unsigned char)(ui_node_data_instanced - 1);
+static const unsigned char NODE_TYPE_NO_FLAG_MASK = (unsigned char)(ui_node_flag_data_instanced - 1);
 
 static inline int helper_is_single_childed(ui_node_type type) {
     type &= NODE_TYPE_NO_FLAG_MASK;
@@ -389,17 +453,17 @@ static inline int helper_is_single_childed(ui_node_type type) {
 }
 
 static inline const void* helper_get_data(const ui_node* node, const char* instance) {
-    if (node->type & ui_node_data_instanced) return (void*)(instance + node->data_instance_offset);
+    if (node->type & ui_node_flag_data_instanced) return (void*)(instance + node->data_instance_offset);
     return node->data;
 }
 
 static inline const ui_node* helper_get_node_single_child(const ui_node* node, const char* instance) {
-    if (!(node->type & ui_node_child_instanced)) return node->child;
+    if (!(node->type & ui_node_flag_child_instanced)) return node->child;
     return *(const ui_node**)(instance + node->child_instance_offset);
 }
 
 static inline const ui_node_array helper_get_node_children_array(const ui_node* node, const char* instance) {
-    if (!(node->type & ui_node_child_instanced)) return *node->child_array;
+    if (!(node->type & ui_node_flag_child_instanced)) return *node->child_array;
     return **(const ui_node_array**)(instance + node->child_instance_offset);
 }
 
@@ -735,18 +799,18 @@ static void measure_dispatch(helper_measurement_walk_context* mc, const ui_node*
     measure_copy_child_or_fill(mc, node, idx, first_child_index);
 }
 
-ui_return_info ui_measure(ui_tree_info* ti) {
-    size_t* measurements_count = (size_t*)ti->temp_memory;
+ui_return_flag ui_measure(ui_args* a) {
+    size_t* measurements_count = (size_t*)a->temp_memory;
 
     helper_measurement_walk_context mc = {
         .instance               = 0x0,
         .last_used_index        = 0,
-        .measurements           = (helper_measurement*)(ti->temp_memory + sizeof(size_t)),
-        .measurements_capacity  = (ti->temp_capacity / sizeof(helper_measurement)),
+        .measurements           = (helper_measurement*)(a->temp_memory + sizeof(size_t)),
+        .measurements_capacity  = (a->temp_capacity / sizeof(helper_measurement)),
     };
 
-    if (setjmp(mc.ui_measure_call_frame) == 0) measure_dispatch(&mc, ti->root, 0);
-    else return ui_return_arena_too_small;
+    if (setjmp(mc.ui_measure_call_frame) == 0) measure_dispatch(&mc, a->root, 0);
+    else return ui_retrun_temp_to_small;
 
     *measurements_count = mc.last_used_index + 1;
     return ui_return_ok;
@@ -816,17 +880,13 @@ static inline float helper_children_flexsum_height
 
 typedef struct helper_rendering_walk_context {
     jmp_buf                     ui_render_call_frame;   // ui_render call jmp buf, in case temp memory proves to small
-
-    const void*                 instance;
-
+    const void*                 instance;               // current subtree instance
     size_t                      last_used_index;        // see implementation note
-    const helper_measurement*   measurements;           // read target
-
-    size_t                      temp_cap;
-    size_t                      temp_pos;
-    char*                       temp_mem;
-
-    void*                       user_context;
+    const helper_measurement*   measurements;           // measurements read target
+    size_t                      temp_cap;               // temporary memory capacity
+    size_t                      temp_pos;               // temporary memory arena allocation position
+    char*                       temp_mem;               // temporary memory pointer
+    void*                       user_context;           // user context to be passed to injected functions
 } helper_rendering_walk_context;
 
 // Allocates first free given amount of bytes in temp memory
@@ -853,11 +913,11 @@ static inline void helper_temp_mem_arena_free(helper_rendering_walk_context* rc,
 static void render_dispatch
 (helper_rendering_walk_context* rc, const ui_node* node, size_t idx, helper_transform_pack trs);
 
-// Read render_pass_to_single_child
-// This part is exposed for ui_node_instance
-static inline void render_pass_to_single_child_given_child
-(helper_rendering_walk_context* rc, const ui_node* node, size_t idx, size_t cidx, helper_transform_pack trs, const ui_node* child) {
-    if (!child) return;
+// Render option for sizebox
+// Renders the child, while altering it's transform according to measurements
+static inline void render_sizebox
+(helper_rendering_walk_context* rc, const ui_node* node, size_t idx, size_t cidx, helper_transform_pack trs) {
+    const ui_node* child = helper_get_node_single_child(node, rc->instance);
 
     helper_measurement own_measure   = rc->measurements[idx];
     helper_measurement child_measure = rc->measurements[cidx];
@@ -876,16 +936,8 @@ static inline void render_pass_to_single_child_given_child
     render_dispatch(rc, child, cidx, helper_scale_pack_to_dim(trs, given_width, given_height));
 }
 
-// Works for single childed nodes
-// Passes rendering process to child
-// With regard for own and child measurements
-static inline void render_pass_to_single_child
-(helper_rendering_walk_context* rc, const ui_node* node, size_t idx, size_t cidx, helper_transform_pack trs) {
-    const ui_node* child = helper_get_node_single_child(node, rc->instance);
-    render_pass_to_single_child_given_child(rc, node, idx, cidx, trs, child);
-}
-
-// Render child padded
+// Render option for padding
+// Renders child padded
 // The padding may scale between [min, max]
 // But keep proportion in axis (between left and right, and top and bottom)
 static inline void render_padding
@@ -933,6 +985,7 @@ static inline void render_padding
     render_dispatch(rc, child, cidx, trs);
 }
 
+// Render option for row
 // Layouts and renders children in a sequence
 // Divides leftower space among children proportional to their flex values
 static inline void render_row
@@ -1077,6 +1130,7 @@ static inline void render_row
     helper_temp_mem_arena_free(rc, (char*)slots);
 }
 
+// Render option for column
 // Layouts and renders children in a sequence
 // Divides lower space among children proportional to their flex values
 static inline void render_column
@@ -1238,7 +1292,8 @@ static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* no
         const void* old_instance = rc->instance;
         rc->instance = helper_get_data(node, rc->instance);
 
-        render_pass_to_single_child_given_child(rc, node, idx, first_child_index, trs, child);
+        // recurse into subtree
+        if (child) render_dispatch(rc, child, first_child_index, trs);
 
         rc->instance = old_instance;
     } return;
@@ -1251,8 +1306,9 @@ static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* no
     } break;
 
     case ui_node_padding: render_padding(rc, node, idx, first_child_index, trs); return;
-    case ui_node_row:     render_row    (rc, node, idx, first_child_index, trs);     return;
-    case ui_node_column:  render_column (rc, node, idx, first_child_index, trs);  return;
+    case ui_node_sizebox: render_sizebox(rc, node, idx, first_child_index, trs); return;
+    case ui_node_row:     render_row    (rc, node, idx, first_child_index, trs); return;
+    case ui_node_column:  render_column (rc, node, idx, first_child_index, trs); return;
 
     // for primitves call injected methods
     case ui_node_box: {
@@ -1262,31 +1318,35 @@ static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* no
     } break;
     }
 
-    render_pass_to_single_child(rc, node, idx, first_child_index, trs);
+    // by default recurse into subtree, without altering transform
+    // works only for single childed nodes - multi childed nodes must be specified
+    // this is, because not all nodes alters transform anyhow
+    const ui_node* child = helper_get_node_single_child(node, rc->instance);
+    if (child) render_dispatch(rc, child, first_child_index, trs);
 }
 
-ui_return_info ui_render(ui_tree_info* ti) {
+ui_return_flag ui_render(ui_args* a) {
     helper_transform_pack trs = {
         .trans        = ui_default_trans,
-        .pixel_width  = ti->resolution_x,
-        .pixel_height = ti->resolution_y
+        .pixel_width  = a->resolution_x,
+        .pixel_height = a->resolution_y
     };
 
-    size_t measurements_made = *(size_t*)(ti->temp_memory);
+    size_t measurements_made = *(size_t*)(a->temp_memory);
     size_t temp_pos = sizeof(size_t) + measurements_made * sizeof(helper_measurement);
 
     helper_rendering_walk_context rc = {
         .instance        = 0x0,
         .last_used_index = 0,
-        .temp_cap        = ti->temp_capacity,
+        .temp_cap        = a->temp_capacity,
         .temp_pos        = temp_pos,
-        .temp_mem        = ti->temp_memory,
-        .measurements    = (helper_measurement*)(ti->temp_memory + sizeof(size_t)),
-        .user_context    = ti->user_context
+        .temp_mem        = a->temp_memory,
+        .measurements    = (helper_measurement*)(a->temp_memory + sizeof(size_t)),
+        .user_context    = a->user_context
     };
 
-    if (setjmp(rc.ui_render_call_frame) == 0) render_dispatch(&rc, ti->root, 0, trs);
-    else return ui_return_arena_too_small;
+    if (setjmp(rc.ui_render_call_frame) == 0) render_dispatch(&rc, a->root, 0, trs);
+    else return ui_retrun_temp_to_small;
 
     return ui_return_ok;
 }
