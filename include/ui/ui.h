@@ -9,7 +9,7 @@
     typedef struct ui_image_data ui_image_data;
     typedef struct ui_text_data  ui_text_data;
 
-    static inline void ui_injection_measure_tight_image(
+    static inline void ui_injection_measure_sized_image(
         const ui_image_data*    data,
         ui_length*              width_target, 
         ui_length*              height_target,
@@ -181,8 +181,15 @@ typedef enum ui_node_type {
 
     // node box
     // a box render primitive
+    // on render takes entire given space
     // single childed
     ui_node_box,
+
+    // node box
+    // other box render primitive
+    // on render it's dimensions are dicatated by it's subtree measurement
+    // single childed
+    ui_node_tight_box,
 
     // node image
     // image render primitive
@@ -191,12 +198,20 @@ typedef enum ui_node_type {
     // single childed
     ui_node_image,
 
-    // node tight image
-    // other image render primitive
-    // renders given texture in it's desired size
+    // node image
+    // image render primitive
+    // on render it's dimensions are dicatated by it's subtree measurement
     // data - ui_image_data
     // single childed
     ui_node_tight_image,
+
+    // node sized image
+    // other image render primitive
+    // renders given texture in it's desired size 
+    // (unless stretched by contents minimal size)
+    // data - ui_image_data
+    // single childed
+    ui_node_sized_image,
 
     // node text
     // text render primitive
@@ -895,17 +910,17 @@ static inline void measure_column(helper_measurement_walk_context* mc, const ui_
     mc->measurements[idx] = own;
 }
 
-// Measure option for ui_node_tight_image
+// Measure option for ui_node_sized_image
 // First measures subtree, then measures the image
 // In both axes:
 // min = max(subtree.min, image.min)
 // max = max(subtree.min, image.max)
-static inline void measure_tight_image(helper_measurement_walk_context* mc, const ui_node* node, size_t idx, size_t cidx) {
+static inline void measure_sized_image(helper_measurement_walk_context* mc, const ui_node* node, size_t idx, size_t cidx) {
     measure_copy_child_or_fill(mc, node, idx, cidx);
     helper_measurement* own = &mc->measurements[idx];
 
     const ui_image_data* data = helper_get_data(node, mc->instance);
-    ui_length width, height; ui_injection_measure_tight_image(data, &width, &height, mc->user_context);
+    ui_length width, height; ui_injection_measure_sized_image(data, &width, &height, mc->user_context);
 
     // lower limits
     own->width.min  = helper_max(own->width.min, width.min);
@@ -973,7 +988,7 @@ static void measure_dispatch(helper_measurement_walk_context* mc, const ui_node*
     case ui_node_sizebox:       measure_sizebox     (mc, node, idx, first_child_index);    return;
     case ui_node_row:           measure_row         (mc, node, idx, first_child_index);    return;
     case ui_node_column:        measure_column      (mc, node, idx, first_child_index);    return;
-    case ui_node_tight_image:   measure_tight_image (mc, node, idx, first_child_index);    return;
+    case ui_node_sized_image:   measure_sized_image (mc, node, idx, first_child_index);    return;
     case ui_node_text:          measure_text        (mc, node, idx, first_child_index);    return;
     }
 
@@ -1503,17 +1518,30 @@ static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* no
 
     // for primitves call injected methods
     case ui_node_box: {
-        trs = helper_limit_given_space_to_own_measurement(trs, rc->measurements[idx]);
+        // dont wrap
         ui_injection_render_box(trs.trans, trs.pixel_width, trs.pixel_height, helper_get_data(node, rc->instance), rc->user_context);
     } break;
-    case ui_node_tight_image: {
-        trs = helper_limit_given_space_to_own_measurement(trs, rc->measurements[idx]);
-        ui_injection_render_image(trs.trans, trs.pixel_width, trs.pixel_height, helper_get_data(node, rc->instance), rc->user_context);
+
+    case ui_node_tight_box: {
+        trs = helper_limit_given_space_to_own_measurement(trs, rc->measurements[idx]); // wrap to contents
+        ui_injection_render_box(trs.trans, trs.pixel_width, trs.pixel_height, helper_get_data(node, rc->instance), rc->user_context);
     } break;
+
     case ui_node_image: {
-        trs = helper_limit_given_space_to_own_measurement(trs, rc->measurements[idx]);
+        // dont wrap
         ui_injection_render_image(trs.trans, trs.pixel_width, trs.pixel_height, helper_get_data(node, rc->instance), rc->user_context);
     } break;
+
+    case ui_node_tight_image: {
+        trs = helper_limit_given_space_to_own_measurement(trs, rc->measurements[idx]); // wrap to contents
+        ui_injection_render_image(trs.trans, trs.pixel_width, trs.pixel_height, helper_get_data(node, rc->instance), rc->user_context);
+    } break;
+
+    case ui_node_sized_image: {
+        trs = helper_limit_given_space_to_own_measurement(trs, rc->measurements[idx]); // wrap to contents
+        ui_injection_render_image(trs.trans, trs.pixel_width, trs.pixel_height, helper_get_data(node, rc->instance), rc->user_context);
+    } break;
+    
     case ui_node_text: {
         trs = helper_limit_given_space_to_own_measurement(trs, rc->measurements[idx]);
         ui_injection_render_text(trs.trans, trs.pixel_width, trs.pixel_height, helper_get_data(node, rc->instance), rc->user_context);
