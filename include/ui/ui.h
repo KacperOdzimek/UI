@@ -10,30 +10,41 @@
     typedef struct ui_text_data  ui_text_data;
 
     static inline void ui_injection_measure_tight_image(
-        const ui_image_data* image, 
-        ui_length* width_target, ui_length* height_target,
-        void* user_context
+        const ui_image_data*    data,
+        ui_length*              width_target, 
+        ui_length*              height_target,
+        void*                   user_context
     );
 
     static inline void ui_injection_measure_text(
-        const ui_text_data* text,
-        ui_length* width_target, ui_length* height_target,
-        void* user_context
+        const ui_text_data*     data,
+        ui_length*              width_target, 
+        ui_length*              height_target,
+        void*                   user_context
     );
 
     static inline void ui_injection_render_box(
-        ui_transform transform, int pixels_width, int pixels_height, 
-        const ui_box_data* data, void* user_context
+        ui_transform            transform, 
+        int                     pixels_width, 
+        int                     pixels_height, 
+        const ui_box_data*      data,
+        void*                   user_context
     );
 
     static inline void ui_injection_render_image(
-        ui_transform transform, int pixels_width, int pixels_height, 
-        const ui_image_data* data, void* user_context
+        ui_transform            transform, 
+        int                     pixels_width, 
+        int                     pixels_height, 
+        const ui_image_data*    data,
+        void*                   user_context
     );
 
     static inline void ui_injection_render_text(
-        ui_transform transform, int pixels_width, int pixels_height, 
-        const ui_text_data* data, void* user_context
+        ui_transform            transform, 
+        int                     pixels_width, 
+        int                     pixels_height, 
+        const ui_text_data*     data,
+        void*                   user_context
     );
 #endif
 
