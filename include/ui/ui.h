@@ -1045,6 +1045,14 @@ static inline int helper_bound_length_in_parent(ui_length length, int parent_axi
     return result;
 }
 
+// Bounds given space inside given measurement
+static inline helper_transform_pack helper_limit_given_space_to_own_measurement
+(helper_transform_pack trs, helper_measurement measurement) {
+    int width  = helper_bound_length_in_parent(measurement.width,  trs.pixel_width);
+    int height = helper_bound_length_in_parent(measurement.height, trs.pixel_height);
+    trs = helper_scale_pack_to_dim(trs, width, height); return trs;
+}
+
 // Returns sum of width flexes of given node's children
 static inline float helper_children_flexsum_width
 (const helper_measurement* measurements, size_t child_count, const ui_node* children, size_t cidx) {
@@ -1495,23 +1503,19 @@ static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* no
 
     // for primitves call injected methods
     case ui_node_box: {
+        trs = helper_limit_given_space_to_own_measurement(trs, rc->measurements[idx]);
         ui_injection_render_box(trs.trans, trs.pixel_width, trs.pixel_height, helper_get_data(node, rc->instance), rc->user_context);
     } break;
     case ui_node_tight_image: {
-        helper_measurement own = rc->measurements[idx];
-        int width  = helper_bound_length_in_parent(own.width,  trs.pixel_width);
-        int height = helper_bound_length_in_parent(own.height, trs.pixel_height);
-        trs = helper_scale_pack_to_dim(trs, width, height);
+        trs = helper_limit_given_space_to_own_measurement(trs, rc->measurements[idx]);
         ui_injection_render_image(trs.trans, trs.pixel_width, trs.pixel_height, helper_get_data(node, rc->instance), rc->user_context);
     } break;
     case ui_node_image: {
+        trs = helper_limit_given_space_to_own_measurement(trs, rc->measurements[idx]);
         ui_injection_render_image(trs.trans, trs.pixel_width, trs.pixel_height, helper_get_data(node, rc->instance), rc->user_context);
     } break;
     case ui_node_text: {
-        helper_measurement own = rc->measurements[idx];
-        int width  = helper_bound_length_in_parent(own.width,  trs.pixel_width);
-        int height = helper_bound_length_in_parent(own.height, trs.pixel_height);
-        trs = helper_scale_pack_to_dim(trs, width, height);
+        trs = helper_limit_given_space_to_own_measurement(trs, rc->measurements[idx]);
         ui_injection_render_text(trs.trans, trs.pixel_width, trs.pixel_height, helper_get_data(node, rc->instance), rc->user_context);
     }
     }
