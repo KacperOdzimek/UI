@@ -55,8 +55,6 @@
 
     static inline void ui_injection_render_set_clipbox(
         ui_transform            transform,
-        int                     pixels_width,
-        int                     pixels_height,
         void*                   user_context
     );
 #endif
@@ -151,7 +149,7 @@ static inline ui_color ui_hex(const char* hex);
 typedef enum ui_node_type {
     // Architectural
 
-    // instance node
+    // node instance
     // sets instance pointer to value of own data
     // this pointer will be then carried into the subtree during
     // measure/render travelsals, affecting data reads from child nodes
@@ -161,10 +159,19 @@ typedef enum ui_node_type {
 
     // Transform
 
-    // transform node
+    // node transform
     // transforms child nodes measure/render by an matrix
     // single childed
     ui_node_transform,
+
+    // Rendering
+
+    // node clipbox
+    // constrains rendering to own dimensions
+    // pair with inner sizebox for full control
+    // no data
+    // single childed
+    ui_node_clipbox,
 
     // Basic Layout
 
@@ -1101,8 +1108,9 @@ static inline float helper_children_flexsum_height
 
 typedef struct helper_rendering_walk_context {
     jmp_buf                     ui_render_call_frame;   // ui_render call jmp buf, in case temp memory proves to small
-    const void*                 instance;               // current subtree instance
     size_t                      last_used_index;        // see implementation note
+    const void*                 instance;               // current subtree instance
+    ui_transform                current_clipbox;        // current clipbox
     const helper_measurement*   measurements;           // measurements read target
     size_t                      temp_cap;               // temporary memory capacity
     size_t                      temp_pos;               // temporary memory arena allocation position
@@ -1519,6 +1527,18 @@ static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* no
         rc->instance = old_instance;
     } return;
 
+    // save current clipbox, overwrite, restore
+    case ui_node_clipbox: {
+        ui_transform old_clip = rc->current_clipbox;
+        rc->current_clipbox = trs.trans;
+
+        // recurse into subtree
+        const ui_node* child = helper_get_node_single_child(node, rc->instance);
+        if (child) render_dispatch(rc, child, first_child_index, trs);
+
+        rc->current_clipbox = old_clip;
+    } break;
+
     // transform matrix, then continue
     case ui_node_transform: {
         const ui_transform_data* data = helper_get_data(node, rc->instance);
@@ -1571,8 +1591,9 @@ ui_return_flag ui_render(ui_args* a) {
     size_t temp_pos = sizeof(size_t) + measurements_made * sizeof(helper_measurement);
 
     helper_rendering_walk_context rc = {
-        .instance        = 0x0,
         .last_used_index = 0,
+        .instance        = 0x0,
+        .current_clipbox = ui_default_trans,
         .temp_cap        = a->temp_capacity,
         .temp_pos        = temp_pos,
         .temp_mem        = a->temp_memory,
