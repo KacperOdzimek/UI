@@ -647,7 +647,9 @@ static inline int helper_is_single_childed(ui_node_type type) {
     type &= NODE_TYPE_NO_FLAG_MASK;
 
     switch (type) {
-    case ui_node_row: case ui_node_column: return 0;
+    case ui_node_row: 
+    case ui_node_column: 
+    return 0;
     }
 
     return 1;
@@ -673,7 +675,7 @@ static inline const ui_node_array helper_get_node_children_array(const ui_node* 
 
 // Alloc block of arena memory after allocated block end
 // If arena proves to small, longjmps to given jmp buffer with given failure flag
-// Allocs aligned
+// Allocs aligned with max aligment
 static inline char* helper_arena_alloc(ui_arena* target, size_t bytes, jmp_buf* failure_jmp, ui_return_flag failure_flag) {
     size_t alignment   = alignof(max_align_t);
     size_t aligned_pos = ((target->position) + (alignment - 1)) & ~(alignment - 1);
@@ -740,13 +742,17 @@ typedef struct helper_measurement {
 } helper_measurement;
 
 typedef struct helper_measurement_walk_context {
-    jmp_buf             ui_measure_call_frame;  // ui_measure call jmp buf, in case temp memory proves to small
-    ui_arena*           temp_arena;
-    const void*         instance;               // current subtree instance
-    size_t              last_used_index;        // see implementation note, also equal to count of measurements made, 
-                                                // used to keep track measurements array fill
-    helper_measurement* measurements;           // measurements write target
-    void*               user_context;           // user context to be passed to injected functions
+    jmp_buf             jmp_target;         // ui_measure call jmp buf, in case of error
+
+    size_t              last_used_index;    // see implementation note, also equal to count of measurements made, 
+                                            // used to keep track measurements array fill
+
+    helper_measurement* measurements;       // measurements array, dynamicaly expanding at the begining of temp_arena
+    ui_arena*           temp_arena;         // temporary arena, measurements write target
+
+    const void*         instance;           // current subtree instance
+
+    void*               user_context;       // user context to be passed to injected functions
 } helper_measurement_walk_context;
 
 // Function dispatching measuring based on node type
@@ -1067,7 +1073,7 @@ static void measure_dispatch(helper_measurement_walk_context* mc, const ui_node*
     else mc->last_used_index += helper_get_node_children_array(node, mc->instance).count;
 
     // alloc measurement memory for this node
-    helper_arena_alloc(mc->temp_arena, sizeof(helper_measurement), &mc->ui_measure_call_frame, ui_return_temp_arena_too_small);
+    helper_arena_alloc(mc->temp_arena, sizeof(helper_measurement), &mc->jmp_target, ui_return_temp_arena_too_small);
 
     // dispatch
     switch (node->type & NODE_TYPE_NO_FLAG_MASK) {
@@ -1113,15 +1119,17 @@ ui_return_flag ui_measure(
     temp_arena->position = 0;
 
     helper_measurement_walk_context mc = {
-        .instance               = 0x0,
         .last_used_index        = 0,
-        .temp_arena             = temp_arena,
+
         .measurements           = (helper_measurement*)(temp_arena->memory),
+        .temp_arena             = temp_arena,
+
+        .instance               = 0x0,
         .user_context           = user_context
     };
 
     // be default returns 0 which is ui_return_ok
-    ui_return_flag flag = setjmp(mc.ui_measure_call_frame);
+    ui_return_flag flag = setjmp(mc.jmp_target);
 
     // longjmp will not happen with ui_return_ok, therefore no loop in here
     if (flag == ui_return_ok) measure_dispatch(&mc, root, 0);
@@ -1200,16 +1208,17 @@ static inline float helper_children_flexsum_height
 }
 
 typedef struct helper_rendering_walk_context {
-    jmp_buf                     ui_render_call_frame;   // ui_render call jmp buf, in case temp memory proves to small
+    jmp_buf                     jmp_target;         // ui_render call jmp buf, in case of error
 
-    ui_arena*                   temp_arena;             // temporary arena
-    ui_arena*                   cmd_arena;              // arena for commands
-    ui_arena*                   clip_arena;             // arena for clipboxes
+    size_t                      last_used_index;    // see implementation note
 
-    size_t                      last_used_index;        // see implementation note
-    const void*                 instance;               // current subtree instance
-    ui_transform                current_clipbox;        // current clipbox
-    const helper_measurement*   measurements;           // measurements read target
+    const helper_measurement*   measurements;       // measurements read target
+    ui_arena*                   temp_arena;         // temporary arena
+    ui_arena*                   cmd_arena;          // arena for commands
+    ui_arena*                   clip_arena;         // arena for clipboxes
+
+    const void*                 instance;           // current subtree instance
+    ui_transform                current_clipbox;    // current clipbox
 } helper_rendering_walk_context;
 
 // Function dispatching rendering based on node type
@@ -1315,7 +1324,7 @@ static inline void render_row
     } slot;
 
     slot* slots = (slot*)helper_arena_alloc(
-        rc->temp_arena, children.count * sizeof(slot), &rc->ui_render_call_frame, ui_return_temp_arena_too_small
+        rc->temp_arena, children.count * sizeof(slot), &rc->jmp_target, ui_return_temp_arena_too_small
     ); for (size_t i = 0; i < children.count; i++) slots[i] = (slot){0, 0};
 
     // find number of spaces
@@ -1461,7 +1470,7 @@ static inline void render_column
     } slot;
 
     slot* slots = (slot*)helper_arena_alloc(
-        rc->temp_arena, children.count * sizeof(slot), &rc->ui_render_call_frame, ui_return_temp_arena_too_small
+        rc->temp_arena, children.count * sizeof(slot), &rc->jmp_target, ui_return_temp_arena_too_small
     ); for (size_t i = 0; i < children.count; i++) slots[i] = (slot){0, 0};
 
     // find number of spaces
@@ -1649,7 +1658,7 @@ static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* no
         };
 
         ui_draw_command* slot = (ui_draw_command*)helper_arena_alloc(
-            rc->cmd_arena, sizeof(ui_draw_command), &rc->ui_render_call_frame, ui_return_command_arena_too_small
+            rc->cmd_arena, sizeof(ui_draw_command), &rc->jmp_target, ui_return_command_arena_too_small
         ); *slot = cmd;
     } break;
 
@@ -1667,7 +1676,7 @@ static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* no
         };
 
         ui_draw_command* slot = (ui_draw_command*)helper_arena_alloc(
-            rc->cmd_arena, sizeof(ui_draw_command), &rc->ui_render_call_frame, ui_return_command_arena_too_small
+            rc->cmd_arena, sizeof(ui_draw_command), &rc->jmp_target, ui_return_command_arena_too_small
         ); *slot = cmd;
     } break;
     
@@ -1685,7 +1694,7 @@ static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* no
         };
 
         ui_draw_command* slot = (ui_draw_command*)helper_arena_alloc(
-            rc->cmd_arena, sizeof(ui_draw_command), &rc->ui_render_call_frame, ui_return_command_arena_too_small
+            rc->cmd_arena, sizeof(ui_draw_command), &rc->jmp_target, ui_return_command_arena_too_small
         ); *slot = cmd;
     }
     }
@@ -1718,18 +1727,17 @@ ui_return_flag ui_render(
     helper_rendering_walk_context rc = {
         .last_used_index = 0,
 
-        .instance        = 0x0,
-        .current_clipbox = ui_default_trans,
-
+        .measurements    = (helper_measurement*)(temp_arena->memory),
         .temp_arena      = temp_arena,
         .cmd_arena       = commands_arena,
         .clip_arena      = clipboxs_arena,
 
-        .measurements    = (helper_measurement*)(temp_arena->memory),
+        .instance        = 0x0,
+        .current_clipbox = ui_default_trans,
     };
 
     // be default returns 0 which is ui_return_ok
-    ui_return_flag flag = setjmp(rc.ui_render_call_frame);
+    ui_return_flag flag = setjmp(rc.jmp_target);
 
     // longjmp will not happen with ui_return_ok, therefore no loop in here
     if (flag == ui_return_ok) render_dispatch(&rc, root, 0, trs);
