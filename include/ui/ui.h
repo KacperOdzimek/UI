@@ -393,15 +393,15 @@ typedef struct ui_arena {
 // flags are self explanatory
 typedef enum ui_return_flag {
     ui_return_ok = 0,
-    ui_return_temp_memory_too_small,
+
+    // when temporary memory would overflow
+    ui_return_temp_arena_too_small,
 
     // when command memory would overflow
-    // or realloc (if provided) failed
-    ui_return_command_memory_too_small,
+    ui_return_command_arena_too_small,
 
     // when clip boxes would overflow
-    // or realloc (if provided) failed
-    ui_return_clip_boxes_memoty_too_small,
+    ui_return_clip_boxes_arena_too_small,
 } ui_return_flag;
 
 // Note: if using fresh non-static arena remember to 0-initialized it!
@@ -428,7 +428,9 @@ ui_return_flag ui_render(
     const ui_node*  root,           // ui tree root
     ui_arena*       temp_arena,     // temporary memory arena
     int             resolution_x,   // screen resolution width
-    int             resolution_y    // screen resolution height
+    int             resolution_y,   // screen resolution height
+    ui_arena*       commands_arena, // arena for draw commands
+    ui_arena*       clipboxs_arena  // arena for clipboxes
 );
 
 // ===========================
@@ -1109,7 +1111,7 @@ ui_return_flag ui_measure(
 
     // alloc one size_t of arena memory
     jmp_buf buf; ui_return_flag flag = setjmp(buf);
-    if (flag == ui_return_ok) measurements_count = (size_t*)helper_arena_alloc(temp_arena, sizeof(size_t), &buf, ui_return_temp_memory_too_small);
+    if (flag == ui_return_ok) measurements_count = (size_t*)helper_arena_alloc(temp_arena, sizeof(size_t), &buf, ui_return_temp_arena_too_small);
     else return flag;
 
     helper_measurement_walk_context mc = {
@@ -1121,7 +1123,7 @@ ui_return_flag ui_measure(
     };
 
     if (setjmp(mc.ui_measure_call_frame) == 0) measure_dispatch(&mc, root, 0);
-    else return ui_return_temp_memory_too_small;
+    else return ui_return_temp_arena_too_small;
 
     *measurements_count = mc.last_used_index + 1;
     return ui_return_ok;
@@ -1199,19 +1201,16 @@ static inline float helper_children_flexsum_height
 
 typedef struct helper_rendering_walk_context {
     jmp_buf                     ui_render_call_frame;   // ui_render call jmp buf, in case temp memory proves to small
+
     ui_arena*                   temp_arena;             // temporary arena
+    ui_arena*                   cmd_arena;              // arena for commands
+    ui_arena*                   clip_arena;             // arena for clipboxes
+
     size_t                      last_used_index;        // see implementation note
     const void*                 instance;               // current subtree instance
     ui_transform                current_clipbox;        // current clipbox
     const helper_measurement*   measurements;           // measurements read target
 } helper_rendering_walk_context;
-
-
-// Tries to push draw command into draw queue
-/*static inline void helper_push_draw_command(helper_rendering_walk_context* rc, ui_draw_command cmd) {
-
-}*/
-
 
 // Function dispatching rendering based on node type
 // - rc   - rendering walk context
@@ -1316,7 +1315,7 @@ static inline void render_row
     } slot;
 
     slot* slots = (slot*)helper_arena_alloc(
-        rc->temp_arena, children.count * sizeof(slot), &rc->ui_render_call_frame, ui_return_temp_memory_too_small
+        rc->temp_arena, children.count * sizeof(slot), &rc->ui_render_call_frame, ui_return_temp_arena_too_small
     ); for (size_t i = 0; i < children.count; i++) slots[i] = (slot){0, 0};
 
     // find number of spaces
@@ -1462,7 +1461,7 @@ static inline void render_column
     } slot;
 
     slot* slots = (slot*)helper_arena_alloc(
-        rc->temp_arena, children.count * sizeof(slot), &rc->ui_render_call_frame, ui_return_temp_memory_too_small
+        rc->temp_arena, children.count * sizeof(slot), &rc->ui_render_call_frame, ui_return_temp_arena_too_small
     ); for (size_t i = 0; i < children.count; i++) slots[i] = (slot){0, 0};
 
     // find number of spaces
@@ -1649,8 +1648,9 @@ static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* no
             .box_data       = *(const ui_box_data*)helper_get_data(node, rc->instance)
         };
 
-        //helper_push_draw_command(rc, cmd);
-        ui_injection_render_box(trs.trans, trs.pixel_width, trs.pixel_height, helper_get_data(node, rc->instance), 0x0);
+        ui_draw_command* slot = (ui_draw_command*)helper_arena_alloc(
+            rc->cmd_arena, sizeof(ui_draw_command), &rc->ui_render_call_frame, ui_return_command_arena_too_small
+        ); *slot = cmd;
     } break;
 
     case ui_node_image: case ui_node_sized_image: {
@@ -1666,8 +1666,9 @@ static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* no
             .image_data     = *(const ui_image_data*)helper_get_data(node, rc->instance)
         };
 
-        //helper_push_draw_command(rc, cmd);
-        ui_injection_render_image(trs.trans, trs.pixel_width, trs.pixel_height, helper_get_data(node, rc->instance), 0x0);
+        ui_draw_command* slot = (ui_draw_command*)helper_arena_alloc(
+            rc->cmd_arena, sizeof(ui_draw_command), &rc->ui_render_call_frame, ui_return_command_arena_too_small
+        ); *slot = cmd;
     } break;
     
     case ui_node_text: {
@@ -1683,8 +1684,9 @@ static void render_dispatch(helper_rendering_walk_context* rc, const ui_node* no
             .text_data      = *(const ui_text_data*)helper_get_data(node, rc->instance)
         };
 
-        //helper_push_draw_command(rc, cmd);
-        ui_injection_render_text(trs.trans, trs.pixel_width, trs.pixel_height, helper_get_data(node, rc->instance), 0x0);
+        ui_draw_command* slot = (ui_draw_command*)helper_arena_alloc(
+            rc->cmd_arena, sizeof(ui_draw_command), &rc->ui_render_call_frame, ui_return_command_arena_too_small
+        ); *slot = cmd;
     }
     }
 
@@ -1699,8 +1701,14 @@ ui_return_flag ui_render(
     const ui_node*  root,
     ui_arena*       temp_arena,
     int             resolution_x,
-    int             resolution_y
+    int             resolution_y,
+    ui_arena*       commands_arena,
+    ui_arena*       clipboxs_arena
 ) {
+    // reset write target arenas
+    commands_arena->position = 0;
+    clipboxs_arena->position = 0;
+
     helper_transform_pack trs = {
         .trans        = ui_default_trans,
         .pixel_width  = resolution_x,
@@ -1712,9 +1720,14 @@ ui_return_flag ui_render(
 
     helper_rendering_walk_context rc = {
         .last_used_index = 0,
+
         .instance        = 0x0,
         .current_clipbox = ui_default_trans,
+
         .temp_arena      = temp_arena,
+        .cmd_arena       = commands_arena,
+        .clip_arena      = clipboxs_arena,
+
         .measurements    = (helper_measurement*)(temp_arena->memory + sizeof(size_t)),
     };
 
