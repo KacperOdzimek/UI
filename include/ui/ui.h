@@ -636,6 +636,7 @@ static inline ui_transform ui_mul(ui_transform p, ui_transform c) {
 // Includes
 
 #include <setjmp.h>
+#include <stdalign.h>
 
 // ===========================
 // Node helpers
@@ -672,9 +673,16 @@ static inline const ui_node_array helper_get_node_children_array(const ui_node* 
 
 // Alloc block of arena memory after allocated block end
 // If arena proves to small, longjmps to given jmp buffer with given failure flag
+// Allocs aligned
 static inline char* helper_arena_alloc(ui_arena* target, size_t bytes, jmp_buf* failure_jmp, ui_return_flag failure_flag) {
-    if (target->position + bytes >= target->capacity) longjmp(*failure_jmp, failure_flag);
-    char* result = target->memory + target->position; target->position += bytes;
+    size_t alignment   = alignof(max_align_t);
+    size_t aligned_pos = ((target->position) + (alignment - 1)) & ~(alignment - 1);
+
+    if (bytes > target->capacity - aligned_pos) longjmp(*failure_jmp, failure_flag);
+
+    char* result = target->memory + aligned_pos;
+    target->position = aligned_pos + bytes;
+
     return result;
 }
 
@@ -733,11 +741,11 @@ typedef struct helper_measurement {
 
 typedef struct helper_measurement_walk_context {
     jmp_buf             ui_measure_call_frame;  // ui_measure call jmp buf, in case temp memory proves to small
+    ui_arena*           temp_arena;
     const void*         instance;               // current subtree instance
     size_t              last_used_index;        // see implementation note, also equal to count of measurements made, 
                                                 // used to keep track measurements array fill
     helper_measurement* measurements;           // measurements write target
-    size_t              measurements_capacity;  // measurements capacity limit
     void*               user_context;           // user context to be passed to injected functions
 } helper_measurement_walk_context;
 
@@ -1058,10 +1066,8 @@ static void measure_dispatch(helper_measurement_walk_context* mc, const ui_node*
     } 
     else mc->last_used_index += helper_get_node_children_array(node, mc->instance).count;
 
-    // check memory overflow
-    if (mc->last_used_index >= mc->measurements_capacity) {
-        longjmp(mc->ui_measure_call_frame, 1);
-    }
+    // alloc measurement memory for this node
+    helper_arena_alloc(mc->temp_arena, sizeof(helper_measurement), &mc->ui_measure_call_frame, ui_return_temp_arena_too_small);
 
     // dispatch
     switch (node->type & NODE_TYPE_NO_FLAG_MASK) {
@@ -1106,27 +1112,21 @@ ui_return_flag ui_measure(
     // reset arena
     temp_arena->position = 0;
 
-    // the count of measurements at the begining of the arena
-    size_t* measurements_count;
-
-    // alloc one size_t of arena memory
-    jmp_buf buf; ui_return_flag flag = setjmp(buf);
-    if (flag == ui_return_ok) measurements_count = (size_t*)helper_arena_alloc(temp_arena, sizeof(size_t), &buf, ui_return_temp_arena_too_small);
-    else return flag;
-
     helper_measurement_walk_context mc = {
         .instance               = 0x0,
         .last_used_index        = 0,
-        .measurements           = (helper_measurement*)(temp_arena->memory + sizeof(size_t)),
-        .measurements_capacity  = (temp_arena->capacity / sizeof(helper_measurement)),
+        .temp_arena             = temp_arena,
+        .measurements           = (helper_measurement*)(temp_arena->memory),
         .user_context           = user_context
     };
 
-    if (setjmp(mc.ui_measure_call_frame) == 0) measure_dispatch(&mc, root, 0);
-    else return ui_return_temp_arena_too_small;
+    // be default returns 0 which is ui_return_ok
+    ui_return_flag flag = setjmp(mc.ui_measure_call_frame);
 
-    *measurements_count = mc.last_used_index + 1;
-    return ui_return_ok;
+    // longjmp will not happen with ui_return_ok, therefore no loop in here
+    if (flag == ui_return_ok) measure_dispatch(&mc, root, 0);
+
+    return flag;
 }
 
 // ===========================
@@ -1715,9 +1715,6 @@ ui_return_flag ui_render(
         .pixel_height = resolution_y
     };
 
-    size_t measurements_made = *(size_t*)(temp_arena->memory);
-    size_t temp_pos = sizeof(size_t) + measurements_made * sizeof(helper_measurement);
-
     helper_rendering_walk_context rc = {
         .last_used_index = 0,
 
@@ -1728,7 +1725,7 @@ ui_return_flag ui_render(
         .cmd_arena       = commands_arena,
         .clip_arena      = clipboxs_arena,
 
-        .measurements    = (helper_measurement*)(temp_arena->memory + sizeof(size_t)),
+        .measurements    = (helper_measurement*)(temp_arena->memory),
     };
 
     // be default returns 0 which is ui_return_ok
