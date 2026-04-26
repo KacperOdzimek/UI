@@ -1,4 +1,3 @@
-# UI System
+# Light User Interface
 
-Tiny ui system for pure C
-Under heavy developent, even this repo name will change
+A single header, C99, graphics-api-agnostic, data driven UI system, under developement!
